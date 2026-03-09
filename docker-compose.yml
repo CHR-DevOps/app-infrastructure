@@ -1,0 +1,37 @@
+version: "3"
+
+services:
+
+  mariadb:
+    image: mariadb:11
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass
+      MYSQL_DATABASE: mydb
+      MYSQL_USER: appuser
+      MYSQL_PASSWORD: apppass
+    volumes:
+      - mariadb_data:/var/lib/mysql
+      - ./db/init:/docker-entrypoint-initdb.d
+
+  backend:
+    build: ../backend
+    restart: always
+    ports:
+      - "5000:5000"
+    environment:
+      DB_HOST: mariadb
+      DB_USER: appuser
+      DB_PASSWORD: apppass
+      DB_NAME: mydb
+    depends_on:
+      - mariadb
+
+  frontend:
+    build: ../frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+
+volumes:
+  mariadb_data:
