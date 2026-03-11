@@ -109,7 +109,7 @@ resource "aws_security_group" "k8s_sg" {
 
 # Single EC2 with automatic k3s install
 resource "aws_instance" "k8s_main" {
-  ami                         = "ami-0a5b5c0ea66ec560d"
+  ami                         = var.ami_id
   instance_type               = "t3.micro"
   subnet_id                   = aws_subnet.public_subnet.id
   vpc_security_group_ids      = [aws_security_group.k8s_sg.id]
