@@ -7,9 +7,6 @@ jobs:
   destroy:
     runs-on: ubuntu-latest
 
-    permissions:
-      contents: read
-
     defaults:
       run:
         working-directory: terraform

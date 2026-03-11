@@ -5,6 +5,7 @@ variable "aws_region" {
 
 variable "ami_id" {
   type = string
+  default = "ami-0a5b5c0ea66ec560d"
 }
 
 variable "key_name" {
