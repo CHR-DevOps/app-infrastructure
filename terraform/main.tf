@@ -116,29 +116,7 @@ resource "aws_instance" "k8s_main" {
   associate_public_ip_address = true
   key_name                    = "devops-key"
 
-  user_data = <<-EOF
-              #!/bin/bash
-              set -euxo pipefail
-
-              apt-get update -y
-              apt-get install -y curl ca-certificates
-
-              # Install k3s
-              curl -sfL https://get.k3s.io | sh -
-
-              # Wait for k3s
-              until systemctl is-active --quiet k3s; do
-                sleep 5
-              done
-
-              # Make kubectl easier for ubuntu user
-              mkdir -p /home/ubuntu/.kube
-              cp /etc/rancher/k3s/k3s.yaml /home/ubuntu/.kube/config
-              chown -R ubuntu:ubuntu /home/ubuntu/.kube
-
-              # Helpful alias
-              echo 'export KUBECONFIG=/etc/rancher/k3s/k3s.yaml' >> /etc/profile
-              EOF
+  user_data = file("${path.module}/bootstrap.sh")
 
   tags = {
     Name = "k8s-main"
