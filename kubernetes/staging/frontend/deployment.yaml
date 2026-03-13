@@ -3,16 +3,23 @@ kind: Deployment
 metadata:
   name: frontend
   namespace: staging
+
 spec:
   replicas: 1
+
   selector:
     matchLabels:
       app: frontend
+
   template:
     metadata:
       labels:
         app: frontend
+
     spec:
+      imagePullSecrets:
+        - name: ghcr-secret
+
       containers:
         - name: frontend
           image: ghcr.io/chr-devops/app-frontend:latest
