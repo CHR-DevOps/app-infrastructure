@@ -32,11 +32,30 @@ done
   --docker-server=ghcr.io \
   --docker-username='${github_username}' \
   --docker-password='${ghcr_token}' \
-  --docker-email=no-reply@example.com \
+  --docker-email='no-reply@example.com' \
   -n staging \
   --dry-run=client -o yaml | /usr/local/bin/kubectl apply -f -
 
-curl -L -o /tmp/staging-app.yaml https://raw.githubusercontent.com/CHR-DevOps/app-infrastructure/${git_branch}/argocd/staging-app.yaml
+cat <<EOF >/tmp/staging-app.yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: staging-app
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/CHR-DevOps/app-infrastructure.git
+    targetRevision: ${git_branch}
+    path: kubernetes/staging
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: staging
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+EOF
 
 /usr/local/bin/kubectl apply -f /tmp/staging-app.yaml
 
