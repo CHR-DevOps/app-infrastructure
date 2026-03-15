@@ -12,3 +12,17 @@ variable "key_name" {
   type    = string
   default = null
 }
+
+variable "github_username" {
+  type = string
+}
+
+variable "ghcr_token" {
+  type      = string
+  sensitive = true
+}
+
+variable "git_branch" {
+  type    = string
+  default = "main"
+}
