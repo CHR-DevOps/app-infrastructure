@@ -21,7 +21,8 @@ for ns in argocd dev test staging prod; do
   /usr/local/bin/kubectl create namespace "$ns" --dry-run=client -o yaml | /usr/local/bin/kubectl apply -f -
 done
 
-/usr/local/bin/kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+curl -L -o /tmp/argocd-install.yaml https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+/usr/local/bin/kubectl apply --server-side -n argocd -f /tmp/argocd-install.yaml
 
 echo "Waiting for ArgoCD pods..."
 until /usr/local/bin/kubectl get pods -n argocd; do
