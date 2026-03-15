@@ -16,7 +16,7 @@ jobs:
 
     defaults:
       run:
-        working-directory: infrastructure/terraform
+        working-directory: gitterraform
 
     steps:
       - name: Checkout
