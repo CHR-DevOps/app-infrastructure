@@ -7,7 +7,7 @@ spec:
   project: default
   source:
     repoURL: https://github.com/CHR-DevOps/app-infrastructure.git
-    targetRevision: main
+    targetRevision: kubernetes-setup-argocd
     path: kubernetes/staging
   destination:
     server: https://kubernetes.default.svc

@@ -17,7 +17,7 @@ spec:
         - name: ghcr-secret
       containers:
         - name: frontend
-          image: ghcr.io/chr-devops/app-frontend:${GITHUB_SHA}
+          image: ghcr.io/chr-devops/app-frontend:latest
           imagePullPolicy: Always
           ports:
             - containerPort: 3000

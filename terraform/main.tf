@@ -116,7 +116,11 @@ resource "aws_instance" "k8s_main" {
   associate_public_ip_address = true
   key_name                    = "devops-key"
 
-  user_data = file("${path.module}/bootstrap.sh")
+  user_data = templatefile("${path.module}/bootstrap.sh", {
+    github_username = var.github_username
+    ghcr_token      = var.ghcr_token
+    git_branch      = var.git_branch
+  })
 
   tags = {
     Name = "k8s-main"

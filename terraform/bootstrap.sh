@@ -28,4 +28,16 @@ until /usr/local/bin/kubectl get pods -n argocd; do
   sleep 5
 done
 
+/usr/local/bin/kubectl create secret docker-registry ghcr-secret \
+  --docker-server=ghcr.io \
+  --docker-username='${github_username}' \
+  --docker-password='${ghcr_token}' \
+  --docker-email=no-reply@example.com \
+  -n staging \
+  --dry-run=client -o yaml | /usr/local/bin/kubectl apply -f -
+
+curl -L -o /tmp/staging-app.yaml https://raw.githubusercontent.com/CHR-DevOps/app-infrastructure/${git_branch}/argocd/staging-app.yaml
+
+/usr/local/bin/kubectl apply -f /tmp/staging-app.yaml
+
 echo "Bootstrap complete"
