@@ -7,6 +7,14 @@ jobs:
   destroy:
     runs-on: ubuntu-latest
 
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      TF_VAR_github_username: ${{ secrets.GIT_USERNAME }}
+      TF_VAR_ghcr_token: ${{ secrets.GHCR_TOKEN_ARGOCD }}
+      TF_VAR_git_branch: ${{ github.ref_name }}
+      TF_VAR_key_name: devops-key
+
     defaults:
       run:
         working-directory: terraform
@@ -29,4 +37,4 @@ jobs:
         run: terraform init
 
       - name: Terraform Destroy
-        run: terraform destroy -auto-approve
+        run: terraform destroy -auto-approve -input=false
