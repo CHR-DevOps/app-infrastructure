@@ -1,0 +1,27 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: prod
+
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - secret.yaml
+
+  - db/pvc.yaml
+  - db/deployment.yaml
+  - db/service.yaml
+
+  - blue/backend-deployment.yaml
+  - blue/backend-service.yaml
+  - blue/frontend-deployment.yaml
+  - blue/frontend-service.yaml
+
+  - green/backend-deployment.yaml
+  - green/backend-service.yaml
+  - green/frontend-deployment.yaml
+  - green/frontend-service.yaml
+
+  - active-service-backend.yaml
+  - active-service-frontend.yaml
+
+  - ingress.yaml

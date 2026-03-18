@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: dev
+data:
+  DB_HOST: mariadb
+  DB_NAME: mydb
+  DB_USER: appuser
+  BACKEND_URL: http://backend:5000

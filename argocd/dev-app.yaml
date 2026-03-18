@@ -1,17 +1,17 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: staging-app
+  name: dev-app
   namespace: argocd
 spec:
   project: default
   source:
     repoURL: https://github.com/CHR-DevOps/app-infrastructure.git
     targetRevision: main
-    path: kubernetes/staging
+    path: kubernetes/dev
   destination:
     server: https://kubernetes.default.svc
-    namespace: staging
+    namespace: dev
   syncPolicy:
     automated:
       prune: true

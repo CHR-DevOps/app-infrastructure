@@ -29,14 +29,42 @@ until /usr/local/bin/kubectl get pods -n argocd; do
   sleep 5
 done
 
-/usr/local/bin/kubectl create secret docker-registry ghcr-secret \
-  --docker-server=ghcr.io \
-  --docker-username='${github_username}' \
-  --docker-password='${ghcr_token}' \
-  --docker-email='no-reply@example.com' \
-  -n staging \
-  --dry-run=client -o yaml | /usr/local/bin/kubectl apply -f -
+echo "Creating GHCR pull secrets..."
+for ns in dev staging prod; do
+  /usr/local/bin/kubectl create secret docker-registry ghcr-secret \
+    --docker-server=ghcr.io \
+    --docker-username='${github_username}' \
+    --docker-password='${ghcr_token}' \
+    --docker-email='no-reply@example.com' \
+    -n "$ns" \
+    --dry-run=client -o yaml | /usr/local/bin/kubectl apply -f -
+done
 
+echo "Creating ArgoCD app for dev..."
+cat <<EOF >/tmp/dev-app.yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: dev-app
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/CHR-DevOps/app-infrastructure.git
+    targetRevision: main
+    path: kubernetes/dev
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: dev
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+EOF
+
+/usr/local/bin/kubectl apply -f /tmp/dev-app.yaml
+
+echo "Creating ArgoCD app for staging..."
 cat <<EOF >/tmp/staging-app.yaml
 apiVersion: argoproj.io/v1alpha1
 kind: Application
@@ -59,5 +87,29 @@ spec:
 EOF
 
 /usr/local/bin/kubectl apply -f /tmp/staging-app.yaml
+
+echo "Creating ArgoCD app for prod..."
+cat <<EOF >/tmp/prod-app.yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: prod-app
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/CHR-DevOps/app-infrastructure.git
+    targetRevision: main
+    path: kubernetes/prod
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: prod
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+EOF
+
+/usr/local/bin/kubectl apply -f /tmp/prod-app.yaml
 
 echo "Bootstrap complete"

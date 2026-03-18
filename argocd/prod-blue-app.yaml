@@ -1,17 +1,17 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: staging-app
+  name: prod-blue-app
   namespace: argocd
 spec:
   project: default
   source:
     repoURL: https://github.com/CHR-DevOps/app-infrastructure.git
     targetRevision: main
-    path: kubernetes/staging
+    path: kubernetes/prod-blue
   destination:
     server: https://kubernetes.default.svc
-    namespace: staging
+    namespace: prod-blue
   syncPolicy:
     automated:
       prune: true
