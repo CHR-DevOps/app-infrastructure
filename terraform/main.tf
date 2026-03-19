@@ -114,7 +114,7 @@ resource "aws_instance" "k8s_main" {
   subnet_id                   = aws_subnet.public_subnet.id
   vpc_security_group_ids      = [aws_security_group.k8s_sg.id]
   associate_public_ip_address = true
-  key_name                    = "devops-key"
+  key_name                    = var.key_name
 
   user_data = templatefile("${path.module}/bootstrap.sh", {
     github_username = var.github_username

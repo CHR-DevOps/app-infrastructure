@@ -26,7 +26,13 @@ jobs:
         uses: hashicorp/setup-terraform@v3
 
       - name: Terraform Init
-        run: terraform init
+        run: |
+          terraform init \
+            -backend-config="bucket=chr-devops-terraform-s3-state" \
+            -backend-config="key=app-infrastructure/prod/terraform.tfstate" \
+            -backend-config="region=eu-central-1" \
+            -backend-config="encrypt=true" \
+            -backend-config="use_lockfile=true"
 
       - name: Terraform Apply
         run: terraform apply -auto-approve
