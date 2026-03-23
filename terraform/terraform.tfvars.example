@@ -1,6 +1,0 @@
-aws_region      = "eu-central-1"
-ami_id          = "ami-01f79b1e4a5c64257"
-key_name        = "devops-key"
-github_username = "your-github-username"
-ghcr_token      = "your-ghcr-token"
-git_branch      = "main"

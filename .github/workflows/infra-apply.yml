@@ -13,6 +13,7 @@ jobs:
       TF_VAR_github_username: ${{ secrets.GIT_USERNAME }}
       TF_VAR_ghcr_token: ${{ secrets.GHCR_TOKEN_ARGOCD }}
       TF_VAR_git_branch: ${{ github.ref_name }}
+      TF_VAR_key_name: ${{ secrets.AWS_EC2_KEY_NAME }}
 
     defaults:
       run:
