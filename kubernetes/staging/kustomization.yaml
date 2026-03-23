@@ -15,6 +15,6 @@ resources:
   - frontend/service.yaml
 images:
   - name: ghcr.io/chr-devops/app-backend
-    newTag: main-33b881764360da6f8ad5c14bb6601aaa0654f1fc
+    newTag: main-7764a57c3b00640712a2356dfcba3615bc552217
   - name: ghcr.io/chr-devops/app-frontend
-    newTag: main-33b881764360da6f8ad5c14bb6601aaa0654f1fc
+    newTag: main-7764a57c3b00640712a2356dfcba3615bc552217
