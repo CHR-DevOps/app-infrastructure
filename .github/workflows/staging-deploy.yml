@@ -243,7 +243,7 @@ jobs:
 
           set -e
 
-          sudo kubectl -n argocd patch application staging-app \
+          sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl -n argocd patch application staging-app \
           --type merge \
           -p '{
             "spec":{
@@ -253,7 +253,7 @@ jobs:
             }
           }'
 
-          sudo kubectl -n argocd annotate application staging-app \
+          sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectlgit  -n argocd annotate application staging-app \
           deploy-ts="$(date +%s)" --overwrite
 
           EOF
