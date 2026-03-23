@@ -4,9 +4,9 @@ metadata:
   name: app-ingress
   namespace: staging
 spec:
+  ingressClassName: traefik
   rules:
-    - host: staging.local
-      http:
+    - http:
         paths:
           - path: /api
             pathType: Prefix

@@ -1,9 +1,9 @@
 #!/bin/bash
 set -euxo pipefail
-
 exec > /var/log/bootstrap.log 2>&1
 
 export DEBIAN_FRONTEND=noninteractive
+
 apt-get update -y
 apt-get install -y curl ca-certificates
 
@@ -17,7 +17,7 @@ until /usr/local/bin/kubectl get nodes; do
   sleep 5
 done
 
-for ns in argocd dev test staging prod; do
+for ns in argocd dev staging; do
   /usr/local/bin/kubectl create namespace "$ns" --dry-run=client -o yaml | /usr/local/bin/kubectl apply -f -
 done
 
@@ -30,7 +30,7 @@ until /usr/local/bin/kubectl get pods -n argocd; do
 done
 
 echo "Creating GHCR pull secrets..."
-for ns in dev staging prod; do
+for ns in dev staging; do
   /usr/local/bin/kubectl create secret docker-registry ghcr-secret \
     --docker-server=ghcr.io \
     --docker-username='${github_username}' \
@@ -40,7 +40,6 @@ for ns in dev staging prod; do
     --dry-run=client -o yaml | /usr/local/bin/kubectl apply -f -
 done
 
-echo "Creating ArgoCD app for dev..."
 cat <<EOF >/tmp/dev-app.yaml
 apiVersion: argoproj.io/v1alpha1
 kind: Application
@@ -64,7 +63,6 @@ EOF
 
 /usr/local/bin/kubectl apply -f /tmp/dev-app.yaml
 
-echo "Creating ArgoCD app for staging..."
 cat <<EOF >/tmp/staging-app.yaml
 apiVersion: argoproj.io/v1alpha1
 kind: Application
@@ -75,7 +73,7 @@ spec:
   project: default
   source:
     repoURL: https://github.com/CHR-DevOps/app-infrastructure.git
-    targetRevision: ${git_branch}
+    targetRevision: main
     path: kubernetes/staging
   destination:
     server: https://kubernetes.default.svc
@@ -88,28 +86,4 @@ EOF
 
 /usr/local/bin/kubectl apply -f /tmp/staging-app.yaml
 
-echo "Creating ArgoCD app for prod..."
-cat <<EOF >/tmp/prod-app.yaml
-apiVersion: argoproj.io/v1alpha1
-kind: Application
-metadata:
-  name: prod-app
-  namespace: argocd
-spec:
-  project: default
-  source:
-    repoURL: https://github.com/CHR-DevOps/app-infrastructure.git
-    targetRevision: main
-    path: kubernetes/prod
-  destination:
-    server: https://kubernetes.default.svc
-    namespace: prod
-  syncPolicy:
-    automated:
-      prune: true
-      selfHeal: true
-EOF
-
-/usr/local/bin/kubectl apply -f /tmp/prod-app.yaml
-
-echo "Bootstrap complete"
+echo "Dev/Staging bootstrap complete"

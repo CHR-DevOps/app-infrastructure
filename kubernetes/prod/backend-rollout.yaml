@@ -1,19 +1,18 @@
-apiVersion: apps/v1
-kind: Deployment
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
 metadata:
-  name: backend-green
+  name: backend
   namespace: prod
 spec:
   replicas: 1
+  revisionHistoryLimit: 2
   selector:
     matchLabels:
       app: backend
-      color: green
   template:
     metadata:
       labels:
         app: backend
-        color: green
     spec:
       imagePullSecrets:
         - name: ghcr-secret
@@ -56,3 +55,9 @@ spec:
               port: 5000
             initialDelaySeconds: 20
             periodSeconds: 10
+  strategy:
+    blueGreen:
+      activeService: backend-active
+      previewService: backend-preview
+      autoPromotionEnabled: false
+      scaleDownDelaySeconds: 30

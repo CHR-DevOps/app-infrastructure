@@ -1,0 +1,187 @@
+name: Production Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Infrastructure/app branch to deploy to production"
+        required: true
+        type: string
+      image_tag:
+        description: "Image tag to promote to prod"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: prod
+  cancel-in-progress: false
+
+jobs:
+  update-prod-manifests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout infrastructure selected branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.branch }}
+
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Update prod image tags
+        run: |
+          yq -i '
+            (.images[] | select(.name == "ghcr.io/chr-devops/app-backend") | .newTag) = "${{ inputs.image_tag }}"
+          ' kubernetes/prod/kustomization.yaml
+
+          yq -i '
+            (.images[] | select(.name == "ghcr.io/chr-devops/app-frontend") | .newTag) = "${{ inputs.image_tag }}"
+          ' kubernetes/prod/kustomization.yaml
+
+      - name: Commit prod image tags
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add kubernetes/prod/kustomization.yaml
+          git commit -m "prod: deploy ${{ inputs.branch }} ${{ inputs.image_tag }}" || echo "No changes to commit"
+          git push origin HEAD:${{ inputs.branch }}
+
+  point-prod-argocd-to-branch:
+    runs-on: ubuntu-latest
+    needs: update-prod-manifests
+    outputs:
+      prod_ip: ${{ steps.prod-ip.outputs.ip }}
+
+    steps:
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: eu-central-1
+
+      - name: Get prod public IP
+        id: prod-ip
+        run: |
+          IP=$(aws ec2 describe-instances \
+            --filters "Name=tag:Name,Values=k8s-prod" "Name=instance-state-name,Values=running" \
+            --query "Reservations[0].Instances[0].PublicIpAddress" \
+            --output text)
+          echo "ip=$IP" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.PROD_EC2_SSH_KEY }}" > ~/.ssh/prod.pem
+          chmod 600 ~/.ssh/prod.pem
+          ssh-keyscan -H ${{ steps.prod-ip.outputs.ip }} >> ~/.ssh/known_hosts
+
+      - name: Patch prod Argo CD app to selected branch
+        run: |
+          ssh -i ~/.ssh/prod.pem ubuntu@${{ steps.prod-ip.outputs.ip }} <<EOF
+            set -euo pipefail
+            export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+            kubectl -n argocd patch application prod-app --type merge -p '{
+              "spec": {
+                "source": {
+                  "targetRevision": "${{ inputs.branch }}"
+                }
+              }
+            }'
+            kubectl -n argocd annotate application prod-app deploy-ts="$(date +%s)" --overwrite
+          EOF
+
+  smoke-test-and-promote:
+    runs-on: ubuntu-latest
+    needs: point-prod-argocd-to-branch
+
+    steps:
+      - name: Prepare SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.PROD_EC2_SSH_KEY }}" > ~/.ssh/prod.pem
+          chmod 600 ~/.ssh/prod.pem
+          ssh-keyscan -H ${{ needs.point-prod-argocd-to-branch.outputs.prod_ip }} >> ~/.ssh/known_hosts
+
+      - name: Wait for preview services and run smoke tests
+        run: |
+          ssh -i ~/.ssh/prod.pem ubuntu@${{ needs.point-prod-argocd-to-branch.outputs.prod_ip }} <<'EOF'
+            set -euo pipefail
+            export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+
+            for i in $(seq 1 60); do
+              kubectl -n prod get svc backend-preview >/dev/null 2>&1 && \
+              kubectl -n prod get svc frontend-preview >/dev/null 2>&1 && break
+              sleep 10
+            done
+
+            for i in $(seq 1 60); do
+              kubectl -n prod port-forward svc/backend-preview 5001:5000 >/tmp/pf-backend.log 2>&1 &
+              BPF=$!
+              kubectl -n prod port-forward svc/frontend-preview 3001:3000 >/tmp/pf-frontend.log 2>&1 &
+              FPF=$!
+              sleep 8
+
+              if curl -fsS http://127.0.0.1:5001/health && curl -fsS http://127.0.0.1:3001/ >/dev/null; then
+                kill $BPF $FPF || true
+                exit 0
+              fi
+
+              kill $BPF $FPF || true
+              sleep 10
+            done
+
+            echo "Preview services failed smoke tests"
+            exit 1
+          EOF
+
+      - name: Promote backend rollout
+        run: |
+          ssh -i ~/.ssh/prod.pem ubuntu@${{ needs.point-prod-argocd-to-branch.outputs.prod_ip }} <<'EOF'
+            set -euo pipefail
+            export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+            kubectl argo rollouts promote backend -n prod
+            kubectl argo rollouts status backend -n prod --timeout 180s
+          EOF
+
+      - name: Promote frontend rollout
+        run: |
+          ssh -i ~/.ssh/prod.pem ubuntu@${{ needs.point-prod-argocd-to-branch.outputs.prod_ip }} <<'EOF'
+            set -euo pipefail
+            export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+            kubectl argo rollouts promote frontend -n prod
+            kubectl argo rollouts status frontend -n prod --timeout 180s
+          EOF
+
+      - name: Monitor production for 10 minutes
+        run: |
+          FAILS=0
+          for i in {1..20}; do
+            if ! curl -fsS "http://${{ needs.point-prod-argocd-to-branch.outputs.prod_ip }}/" >/dev/null; then
+              FAILS=$((FAILS+1))
+            fi
+
+            if ! curl -fsS "http://${{ needs.point-prod-argocd-to-branch.outputs.prod_ip }}/api/health" >/dev/null; then
+              FAILS=$((FAILS+1))
+            fi
+
+            if [ "$FAILS" -ge 3 ]; then
+              echo "Production health failed repeatedly. Rolling back."
+              ssh -i ~/.ssh/prod.pem ubuntu@${{ needs.point-prod-argocd-to-branch.outputs.prod_ip }} <<'EOF'
+                set -euo pipefail
+                export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+                kubectl argo rollouts undo backend -n prod
+                kubectl argo rollouts undo frontend -n prod
+              EOF
+              exit 1
+            fi
+
+            sleep 30
+          done
