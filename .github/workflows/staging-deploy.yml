@@ -259,7 +259,7 @@ jobs:
           EOF
 
 
-S
+
   wait-for-staging:
 
     runs-on: ubuntu-latest
