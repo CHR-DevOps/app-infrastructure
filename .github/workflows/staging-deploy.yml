@@ -253,7 +253,7 @@ jobs:
             }
           }'
 
-          sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectlgit  -n argocd annotate application staging-app \
+          sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl  -n argocd annotate application staging-app \
           deploy-ts="$(date +%s)" --overwrite
 
           EOF
