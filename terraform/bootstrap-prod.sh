@@ -1,9 +1,9 @@
 #!/bin/bash
 set -euxo pipefail
-
 exec > /var/log/bootstrap.log 2>&1
 
 export DEBIAN_FRONTEND=noninteractive
+
 apt-get update -y
 apt-get install -y curl ca-certificates
 
@@ -36,6 +36,10 @@ echo "Waiting for Argo Rollouts pods..."
 until /usr/local/bin/kubectl get pods -n argo-rollouts; do
   sleep 5
 done
+
+curl -LO https://github.com/argoproj/argo-rollouts/releases/latest/download/kubectl-argo-rollouts-linux-amd64
+install -m 555 kubectl-argo-rollouts-linux-amd64 /usr/local/bin/kubectl-argo-rollouts
+rm -f kubectl-argo-rollouts-linux-amd64
 
 echo "Creating GHCR pull secret in prod..."
 /usr/local/bin/kubectl create secret docker-registry ghcr-secret \
