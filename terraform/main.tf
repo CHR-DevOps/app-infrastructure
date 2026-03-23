@@ -115,11 +115,18 @@ resource "aws_instance" "k8s_devstaging" {
   associate_public_ip_address = true
   key_name                    = var.key_name
 
+  root_block_device {
+    volume_size = 20
+    volume_type = "gp3"
+  }
+
   user_data = templatefile("${path.module}/bootstrap-dev-staging.sh", {
     github_username = var.github_username
     ghcr_token      = var.ghcr_token
     git_branch      = var.git_branch
   })
+
+  
 
   user_data_replace_on_change = true
 
@@ -135,6 +142,11 @@ resource "aws_instance" "k8s_prod" {
   vpc_security_group_ids      = [aws_security_group.k8s_sg.id]
   associate_public_ip_address = true
   key_name                    = var.key_name
+
+  root_block_device {
+    volume_size = 20
+    volume_type = "gp3"
+  }
 
   user_data = templatefile("${path.module}/bootstrap-prod.sh", {
     github_username = var.github_username
