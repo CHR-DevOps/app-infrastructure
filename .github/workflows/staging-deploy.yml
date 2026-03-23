@@ -3,32 +3,52 @@ name: Staging Deploy
 on:
   push:
     branches:
-      - main
+      - '**'
 
 permissions:
   contents: write
+
+concurrency:
+  group: staging-${{ github.ref_name }}
+  cancel-in-progress: true
 
 jobs:
   build-and-push-images:
     runs-on: ubuntu-latest
     outputs:
       image_tag: ${{ steps.meta.outputs.image_tag }}
+      safe_branch: ${{ steps.meta.outputs.safe_branch }}
+
     steps:
-      - name: Checkout frontend
-        uses: actions/checkout@v4
-        with:
-          repository: CHR-DevOps/app-frontend
-          path: app-frontend
-
-      - name: Checkout backend
-        uses: actions/checkout@v4
-        with:
-          repository: CHR-DevOps/app-backend
-          path: app-backend
-
-      - name: Generate image tag
+      - name: Generate metadata
         id: meta
-        run: echo "image_tag=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+        run: |
+          SAFE_BRANCH=$(echo "${GITHUB_REF_NAME}" | tr '/' '-' | tr '[:upper:]' '[:lower:]')
+          IMAGE_TAG="${SAFE_BRANCH}-${GITHUB_SHA}"
+          echo "safe_branch=${SAFE_BRANCH}" >> "$GITHUB_OUTPUT"
+          echo "image_tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout frontend branch if exists, else main
+        run: |
+          git clone https://github.com/CHR-DevOps/app-frontend.git app-frontend
+          cd app-frontend
+          git fetch origin
+          if git ls-remote --heads origin "${GITHUB_REF_NAME}" | grep -q "${GITHUB_REF_NAME}"; then
+            git checkout "${GITHUB_REF_NAME}"
+          else
+            git checkout main
+          fi
+
+      - name: Checkout backend branch if exists, else main
+        run: |
+          git clone https://github.com/CHR-DevOps/app-backend.git app-backend
+          cd app-backend
+          git fetch origin
+          if git ls-remote --heads origin "${GITHUB_REF_NAME}" | grep -q "${GITHUB_REF_NAME}"; then
+            git checkout "${GITHUB_REF_NAME}"
+          else
+            git checkout main
+          fi
 
       - name: Login to GHCR
         uses: docker/login-action@v3
@@ -58,11 +78,13 @@ jobs:
   update-staging-manifests:
     runs-on: ubuntu-latest
     needs: build-and-push-images
+
     steps:
-      - name: Checkout infrastructure
+      - name: Checkout infrastructure current branch
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ github.ref_name }}
 
       - name: Install yq
         run: |
@@ -84,14 +106,15 @@ jobs:
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
           git add kubernetes/staging/kustomization.yaml
-          git commit -m "staging: deploy ${GITHUB_SHA}" || echo "No changes to commit"
-          git push
+          git commit -m "staging: deploy ${GITHUB_REF_NAME} ${GITHUB_SHA}" || echo "No changes to commit"
+          git push origin HEAD:${GITHUB_REF_NAME}
 
-  wait-for-staging:
+  point-staging-argocd-to-branch:
     runs-on: ubuntu-latest
     needs: update-staging-manifests
     outputs:
       staging_ip: ${{ steps.staging-ip.outputs.ip }}
+
     steps:
       - name: Configure AWS
         uses: aws-actions/configure-aws-credentials@v4
@@ -109,10 +132,39 @@ jobs:
             --output text)
           echo "ip=$IP" >> "$GITHUB_OUTPUT"
 
+      - name: Prepare SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEV_STAGING_EC2_SSH_KEY }}" > ~/.ssh/staging.pem
+          chmod 600 ~/.ssh/staging.pem
+          ssh-keyscan -H ${{ steps.staging-ip.outputs.ip }} >> ~/.ssh/known_hosts
+
+      - name: Patch staging Argo CD app to current branch
+        run: |
+          ssh -i ~/.ssh/staging.pem ubuntu@${{ steps.staging-ip.outputs.ip }} <<EOF
+            set -euo pipefail
+            export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+            kubectl -n argocd patch application staging-app --type merge -p '{
+              "spec": {
+                "source": {
+                  "targetRevision": "${GITHUB_REF_NAME}"
+                }
+              }
+            }'
+            kubectl -n argocd annotate application staging-app deploy-ts="$(date +%s)" --overwrite
+          EOF
+
+  wait-for-staging:
+    runs-on: ubuntu-latest
+    needs: point-staging-argocd-to-branch
+    outputs:
+      staging_ip: ${{ needs.point-staging-argocd-to-branch.outputs.staging_ip }}
+
+    steps:
       - name: Wait for backend health
         run: |
           for i in {1..60}; do
-            if curl -fsS "http://${{ steps.staging-ip.outputs.ip }}/api/health"; then
+            if curl -fsS "http://${{ needs.point-staging-argocd-to-branch.outputs.staging_ip }}/api/health"; then
               exit 0
             fi
             sleep 10
@@ -123,7 +175,7 @@ jobs:
       - name: Wait for frontend
         run: |
           for i in {1..60}; do
-            if curl -fsS "http://${{ steps.staging-ip.outputs.ip }}/" > /dev/null; then
+            if curl -fsS "http://${{ needs.point-staging-argocd-to-branch.outputs.staging_ip }}/" > /dev/null; then
               exit 0
             fi
             sleep 10
@@ -133,19 +185,31 @@ jobs:
 
   integration-tests:
     runs-on: ubuntu-latest
-    needs: wait-for-staging
-    steps:
-      - name: Checkout frontend
-        uses: actions/checkout@v4
-        with:
-          repository: CHR-DevOps/app-frontend
-          path: app-frontend
+    needs:
+      - wait-for-staging
 
-      - name: Checkout backend
-        uses: actions/checkout@v4
-        with:
-          repository: CHR-DevOps/app-backend
-          path: app-backend
+    steps:
+      - name: Checkout frontend branch if exists, else main
+        run: |
+          git clone https://github.com/CHR-DevOps/app-frontend.git app-frontend
+          cd app-frontend
+          git fetch origin
+          if git ls-remote --heads origin "${GITHUB_REF_NAME}" | grep -q "${GITHUB_REF_NAME}"; then
+            git checkout "${GITHUB_REF_NAME}"
+          else
+            git checkout main
+          fi
+
+      - name: Checkout backend branch if exists, else main
+        run: |
+          git clone https://github.com/CHR-DevOps/app-backend.git app-backend
+          cd app-backend
+          git fetch origin
+          if git ls-remote --heads origin "${GITHUB_REF_NAME}" | grep -q "${GITHUB_REF_NAME}"; then
+            git checkout "${GITHUB_REF_NAME}"
+          else
+            git checkout main
+          fi
 
       - name: Setup Node for frontend
         uses: actions/setup-node@v4

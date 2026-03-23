@@ -1,9 +1,9 @@
 #!/bin/bash
 set -euxo pipefail
-
 exec > /var/log/bootstrap.log 2>&1
 
 export DEBIAN_FRONTEND=noninteractive
+
 apt-get update -y
 apt-get install -y curl ca-certificates
 
@@ -50,7 +50,7 @@ spec:
   project: default
   source:
     repoURL: https://github.com/CHR-DevOps/app-infrastructure.git
-    targetRevision: ${git_branch}
+    targetRevision: main
     path: kubernetes/dev
   destination:
     server: https://kubernetes.default.svc

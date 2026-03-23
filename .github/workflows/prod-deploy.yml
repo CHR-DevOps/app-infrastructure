@@ -1,97 +1,64 @@
-name: Staging Deploy
+name: Production Deploy
 
 on:
-  push:
-    branches:
-      - main
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Infrastructure/app branch to deploy to production"
+        required: true
+        type: string
+      image_tag:
+        description: "Image tag to promote to prod"
+        required: true
+        type: string
 
 permissions:
   contents: write
 
+concurrency:
+  group: prod
+  cancel-in-progress: false
+
 jobs:
-  build-and-push-images:
+  update-prod-manifests:
     runs-on: ubuntu-latest
-    outputs:
-      image_tag: ${{ steps.meta.outputs.image_tag }}
+
     steps:
-      - name: Checkout frontend
-        uses: actions/checkout@v4
-        with:
-          repository: CHR-DevOps/app-frontend
-          path: app-frontend
-
-      - name: Checkout backend
-        uses: actions/checkout@v4
-        with:
-          repository: CHR-DevOps/app-backend
-          path: app-backend
-
-      - name: Generate image tag
-        id: meta
-        run: echo "image_tag=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
-
-      - name: Login to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ secrets.GIT_USERNAME }}
-          password: ${{ secrets.GHCR_TOKEN_ARGOCD }}
-
-      - name: Build and push frontend
-        uses: docker/build-push-action@v6
-        with:
-          context: ./app-frontend
-          push: true
-          tags: |
-            ghcr.io/chr-devops/app-frontend:${{ steps.meta.outputs.image_tag }}
-            ghcr.io/chr-devops/app-frontend:latest
-
-      - name: Build and push backend
-        uses: docker/build-push-action@v6
-        with:
-          context: ./app-backend
-          push: true
-          tags: |
-            ghcr.io/chr-devops/app-backend:${{ steps.meta.outputs.image_tag }}
-            ghcr.io/chr-devops/app-backend:latest
-
-  update-staging-manifests:
-    runs-on: ubuntu-latest
-    needs: build-and-push-images
-    steps:
-      - name: Checkout infrastructure
+      - name: Checkout infrastructure selected branch
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ inputs.branch }}
 
       - name: Install yq
         run: |
           sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
           sudo chmod +x /usr/local/bin/yq
 
-      - name: Update staging image tags
+      - name: Update prod image tags
         run: |
           yq -i '
-            (.images[] | select(.name == "ghcr.io/chr-devops/app-backend") | .newTag) = "${{ needs.build-and-push-images.outputs.image_tag }}"
-          ' kubernetes/staging/kustomization.yaml
+            (.images[] | select(.name == "ghcr.io/chr-devops/app-backend") | .newTag) = "${{ inputs.image_tag }}"
+          ' kubernetes/prod/kustomization.yaml
 
           yq -i '
-            (.images[] | select(.name == "ghcr.io/chr-devops/app-frontend") | .newTag) = "${{ needs.build-and-push-images.outputs.image_tag }}"
-          ' kubernetes/staging/kustomization.yaml
+            (.images[] | select(.name == "ghcr.io/chr-devops/app-frontend") | .newTag) = "${{ inputs.image_tag }}"
+          ' kubernetes/prod/kustomization.yaml
 
-      - name: Commit staging image tags
+      - name: Commit prod image tags
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
-          git add kubernetes/staging/kustomization.yaml
-          git commit -m "staging: deploy ${GITHUB_SHA}" || echo "No changes to commit"
-          git push
+          git add kubernetes/prod/kustomization.yaml
+          git commit -m "prod: deploy ${{ inputs.branch }} ${{ inputs.image_tag }}" || echo "No changes to commit"
+          git push origin HEAD:${{ inputs.branch }}
 
-  wait-for-staging:
+  point-prod-argocd-to-branch:
     runs-on: ubuntu-latest
-    needs: update-staging-manifests
+    needs: update-prod-manifests
     outputs:
-      staging_ip: ${{ steps.staging-ip.outputs.ip }}
+      prod_ip: ${{ steps.prod-ip.outputs.ip }}
+
     steps:
       - name: Configure AWS
         uses: aws-actions/configure-aws-credentials@v4
@@ -100,91 +67,121 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: eu-central-1
 
-      - name: Get staging public IP
-        id: staging-ip
+      - name: Get prod public IP
+        id: prod-ip
         run: |
           IP=$(aws ec2 describe-instances \
-            --filters "Name=tag:Name,Values=k8s-dev-staging" "Name=instance-state-name,Values=running" \
+            --filters "Name=tag:Name,Values=k8s-prod" "Name=instance-state-name,Values=running" \
             --query "Reservations[0].Instances[0].PublicIpAddress" \
             --output text)
           echo "ip=$IP" >> "$GITHUB_OUTPUT"
 
-      - name: Wait for backend health
+      - name: Prepare SSH key
         run: |
-          for i in {1..60}; do
-            if curl -fsS "http://${{ steps.staging-ip.outputs.ip }}/api/health"; then
-              exit 0
-            fi
-            sleep 10
-          done
-          echo "Backend did not become healthy in time"
-          exit 1
+          mkdir -p ~/.ssh
+          echo "${{ secrets.PROD_EC2_SSH_KEY }}" > ~/.ssh/prod.pem
+          chmod 600 ~/.ssh/prod.pem
+          ssh-keyscan -H ${{ steps.prod-ip.outputs.ip }} >> ~/.ssh/known_hosts
 
-      - name: Wait for frontend
+      - name: Patch prod Argo CD app to selected branch
         run: |
-          for i in {1..60}; do
-            if curl -fsS "http://${{ steps.staging-ip.outputs.ip }}/" > /dev/null; then
-              exit 0
-            fi
-            sleep 10
-          done
-          echo "Frontend did not become healthy in time"
-          exit 1
+          ssh -i ~/.ssh/prod.pem ubuntu@${{ steps.prod-ip.outputs.ip }} <<EOF
+            set -euo pipefail
+            export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+            kubectl -n argocd patch application prod-app --type merge -p '{
+              "spec": {
+                "source": {
+                  "targetRevision": "${{ inputs.branch }}"
+                }
+              }
+            }'
+            kubectl -n argocd annotate application prod-app deploy-ts="$(date +%s)" --overwrite
+          EOF
 
-  integration-tests:
+  smoke-test-and-promote:
     runs-on: ubuntu-latest
-    needs: wait-for-staging
+    needs: point-prod-argocd-to-branch
+
     steps:
-      - name: Checkout frontend
-        uses: actions/checkout@v4
-        with:
-          repository: CHR-DevOps/app-frontend
-          path: app-frontend
+      - name: Prepare SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.PROD_EC2_SSH_KEY }}" > ~/.ssh/prod.pem
+          chmod 600 ~/.ssh/prod.pem
+          ssh-keyscan -H ${{ needs.point-prod-argocd-to-branch.outputs.prod_ip }} >> ~/.ssh/known_hosts
 
-      - name: Checkout backend
-        uses: actions/checkout@v4
-        with:
-          repository: CHR-DevOps/app-backend
-          path: app-backend
+      - name: Wait for preview services and run smoke tests
+        run: |
+          ssh -i ~/.ssh/prod.pem ubuntu@${{ needs.point-prod-argocd-to-branch.outputs.prod_ip }} <<'EOF'
+            set -euo pipefail
+            export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 
-      - name: Setup Node for frontend
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: app-frontend/package-lock.json
+            for i in $(seq 1 60); do
+              kubectl -n prod get svc backend-preview >/dev/null 2>&1 && \
+              kubectl -n prod get svc frontend-preview >/dev/null 2>&1 && break
+              sleep 10
+            done
 
-      - name: Install frontend dependencies
-        run: npm ci
-        working-directory: app-frontend
+            for i in $(seq 1 60); do
+              kubectl -n prod port-forward svc/backend-preview 5001:5000 >/tmp/pf-backend.log 2>&1 &
+              BPF=$!
+              kubectl -n prod port-forward svc/frontend-preview 3001:3000 >/tmp/pf-frontend.log 2>&1 &
+              FPF=$!
+              sleep 8
 
-      - name: Install Playwright browsers for frontend
-        run: npx playwright install --with-deps
-        working-directory: app-frontend
+              if curl -fsS http://127.0.0.1:5001/health && curl -fsS http://127.0.0.1:3001/ >/dev/null; then
+                kill $BPF $FPF || true
+                exit 0
+              fi
 
-      - name: Run frontend integration tests against staging
-        run: npm run test:e2e
-        working-directory: app-frontend
-        env:
-          PLAYWRIGHT_BASE_URL: http://${{ needs.wait-for-staging.outputs.staging_ip }}
+              kill $BPF $FPF || true
+              sleep 10
+            done
 
-      - name: Setup Node for backend
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: app-backend/package-lock.json
+            echo "Preview services failed smoke tests"
+            exit 1
+          EOF
 
-      - name: Install backend dependencies
-        run: npm ci
-        working-directory: app-backend
+      - name: Promote backend rollout
+        run: |
+          ssh -i ~/.ssh/prod.pem ubuntu@${{ needs.point-prod-argocd-to-branch.outputs.prod_ip }} <<'EOF'
+            set -euo pipefail
+            export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+            kubectl argo rollouts promote backend -n prod
+            kubectl argo rollouts status backend -n prod --timeout 180s
+          EOF
 
-      - name: Install Playwright browsers for backend
-        run: npx playwright install --with-deps
-        working-directory: app-backend
+      - name: Promote frontend rollout
+        run: |
+          ssh -i ~/.ssh/prod.pem ubuntu@${{ needs.point-prod-argocd-to-branch.outputs.prod_ip }} <<'EOF'
+            set -euo pipefail
+            export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+            kubectl argo rollouts promote frontend -n prod
+            kubectl argo rollouts status frontend -n prod --timeout 180s
+          EOF
 
-      - name: Run backend integration tests against staging
-        run: npm run test:e2e
-        working-directory: app-backend
-        env:
-          PLAYWRIGHT_BASE_URL: http://${{ needs.wait-for-staging.outputs.staging_ip }}/api
+      - name: Monitor production for 10 minutes
+        run: |
+          FAILS=0
+          for i in {1..20}; do
+            if ! curl -fsS "http://${{ needs.point-prod-argocd-to-branch.outputs.prod_ip }}/" >/dev/null; then
+              FAILS=$((FAILS+1))
+            fi
+
+            if ! curl -fsS "http://${{ needs.point-prod-argocd-to-branch.outputs.prod_ip }}/api/health" >/dev/null; then
+              FAILS=$((FAILS+1))
+            fi
+
+            if [ "$FAILS" -ge 3 ]; then
+              echo "Production health failed repeatedly. Rolling back."
+              ssh -i ~/.ssh/prod.pem ubuntu@${{ needs.point-prod-argocd-to-branch.outputs.prod_ip }} <<'EOF'
+                set -euo pipefail
+                export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+                kubectl argo rollouts undo backend -n prod
+                kubectl argo rollouts undo frontend -n prod
+              EOF
+              exit 1
+            fi
+
+            sleep 30
+          done
