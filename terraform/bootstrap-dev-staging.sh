@@ -7,6 +7,21 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
 apt-get install -y curl ca-certificates
 
+echo "Creating swap..."
+
+fallocate -l 4G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=4096
+
+chmod 600 /swapfile
+mkswap /swapfile
+swapon /swapfile
+
+echo '/swapfile none swap sw 0 0' >> /etc/fstab
+
+sysctl vm.swappiness=10
+echo 'vm.swappiness=10' >> /etc/sysctl.conf
+
+free -h
+
 curl -sfL https://get.k3s.io | sh -
 
 export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
