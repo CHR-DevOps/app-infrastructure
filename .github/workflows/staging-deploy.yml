@@ -241,9 +241,9 @@ jobs:
           -i ~/.ssh/staging.pem \
           ubuntu@${{ steps.staging-ip.outputs.ip }} <<EOF
 
-          export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+          set -e
 
-          kubectl -n argocd patch application staging-app \
+          sudo kubectl -n argocd patch application staging-app \
           --type merge \
           -p '{
             "spec":{
@@ -253,7 +253,7 @@ jobs:
             }
           }'
 
-          kubectl -n argocd annotate application staging-app \
+          sudo kubectl -n argocd annotate application staging-app \
           deploy-ts="$(date +%s)" --overwrite
 
           EOF
