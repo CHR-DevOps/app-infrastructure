@@ -29,5 +29,5 @@ variable "git_branch" {
 
 variable "instance_type" {
   type    = string
-  default = "t3.small"
+  default = "t3.medium"
 }
