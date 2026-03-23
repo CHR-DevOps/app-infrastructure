@@ -1,19 +1,18 @@
-apiVersion: apps/v1
-kind: Deployment
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
 metadata:
-  name: frontend-green
+  name: frontend
   namespace: prod
 spec:
   replicas: 1
+  revisionHistoryLimit: 2
   selector:
     matchLabels:
       app: frontend
-      color: blue
   template:
     metadata:
       labels:
         app: frontend
-        color: green
     spec:
       imagePullSecrets:
         - name: ghcr-secret
@@ -35,3 +34,9 @@ spec:
               port: 3000
             initialDelaySeconds: 20
             periodSeconds: 10
+  strategy:
+    blueGreen:
+      activeService: frontend-active
+      previewService: frontend-preview
+      autoPromotionEnabled: false
+      scaleDownDelaySeconds: 30

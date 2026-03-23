@@ -107,22 +107,44 @@ resource "aws_security_group" "k8s_sg" {
   }
 }
 
-# Single EC2 with automatic k3s install
-resource "aws_instance" "k8s_main" {
+resource "aws_instance" "k8s_devstaging" {
   ami                         = var.ami_id
-  instance_type               = "t3.small"
+  instance_type               = var.instance_type
   subnet_id                   = aws_subnet.public_subnet.id
   vpc_security_group_ids      = [aws_security_group.k8s_sg.id]
   associate_public_ip_address = true
   key_name                    = var.key_name
 
-  user_data = templatefile("${path.module}/bootstrap.sh", {
+  user_data = templatefile("${path.module}/bootstrap-dev-staging.sh", {
     github_username = var.github_username
     ghcr_token      = var.ghcr_token
     git_branch      = var.git_branch
   })
 
+  user_data_replace_on_change = true
+
   tags = {
-    Name = "k8s-main"
+    Name = "k8s-dev-staging"
+  }
+}
+
+resource "aws_instance" "k8s_prod" {
+  ami                         = var.ami_id
+  instance_type               = var.instance_type
+  subnet_id                   = aws_subnet.public_subnet.id
+  vpc_security_group_ids      = [aws_security_group.k8s_sg.id]
+  associate_public_ip_address = true
+  key_name                    = var.key_name
+
+  user_data = templatefile("${path.module}/bootstrap-prod.sh", {
+    github_username = var.github_username
+    ghcr_token      = var.ghcr_token
+    git_branch      = var.git_branch
+  })
+
+  user_data_replace_on_change = true
+
+  tags = {
+    Name = "k8s-prod"
   }
 }

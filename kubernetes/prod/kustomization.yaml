@@ -11,17 +11,12 @@ resources:
   - db/deployment.yaml
   - db/service.yaml
 
-  - blue/backend-deployment.yaml
-  - blue/backend-service.yaml
-  - blue/frontend-deployment.yaml
-  - blue/frontend-service.yaml
+  - backend-rollout.yaml
+  - frontend-rollout.yaml
 
-  - green/backend-deployment.yaml
-  - green/backend-service.yaml
-  - green/frontend-deployment.yaml
-  - green/frontend-service.yaml
-
-  - active-service-backend.yaml
-  - active-service-frontend.yaml
+  - backend-active-service.yaml
+  - backend-preview-service.yaml
+  - frontend-active-service.yaml
+  - frontend-preview-service.yaml
 
   - ingress.yaml
