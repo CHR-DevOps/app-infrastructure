@@ -4,62 +4,70 @@ on:
   push:
     branches:
       - '**'
+  repository_dispatch:
+    types:
+      - backend-updated
+      - frontend-updated
 
 permissions:
   contents: write
 
 concurrency:
-  group: staging-${{ github.ref_name }}
+  group: staging-${{ github.event.client_payload.branch || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
-
   build-and-push-images:
     runs-on: ubuntu-latest
 
     outputs:
       image_tag: ${{ steps.meta.outputs.image_tag }}
       safe_branch: ${{ steps.meta.outputs.safe_branch }}
+      deploy_branch: ${{ steps.meta.outputs.deploy_branch }}
 
     steps:
-
       - name: Generate metadata
         id: meta
+        shell: bash
         run: |
-          SAFE_BRANCH=$(echo "${GITHUB_REF_NAME}" | tr '/' '-' | tr '[:upper:]' '[:lower:]')
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            DEPLOY_BRANCH="${{ github.event.client_payload.branch }}"
+          else
+            DEPLOY_BRANCH="${GITHUB_REF_NAME}"
+          fi
+
+          SAFE_BRANCH=$(echo "${DEPLOY_BRANCH}" | tr '/' '-' | tr '[:upper:]' '[:lower:]')
           IMAGE_TAG="${SAFE_BRANCH}-${GITHUB_SHA}"
 
+          echo "deploy_branch=${DEPLOY_BRANCH}" >> "$GITHUB_OUTPUT"
           echo "safe_branch=${SAFE_BRANCH}" >> "$GITHUB_OUTPUT"
           echo "image_tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
 
-
       - name: Checkout frontend branch if exists, else main
+        shell: bash
         run: |
           git clone https://github.com/CHR-DevOps/app-frontend.git app-frontend
           cd app-frontend
           git fetch origin
 
-          if git ls-remote --heads origin "${GITHUB_REF_NAME}" | grep -q "${GITHUB_REF_NAME}"
-          then
-            git checkout "${GITHUB_REF_NAME}"
+          if git ls-remote --heads origin "${{ steps.meta.outputs.deploy_branch }}" | grep -q "${{ steps.meta.outputs.deploy_branch }}"; then
+            git checkout "${{ steps.meta.outputs.deploy_branch }}"
           else
             git checkout main
           fi
 
-
       - name: Checkout backend branch if exists, else main
+        shell: bash
         run: |
           git clone https://github.com/CHR-DevOps/app-backend.git app-backend
           cd app-backend
           git fetch origin
 
-          if git ls-remote --heads origin "${GITHUB_REF_NAME}" | grep -q "${GITHUB_REF_NAME}"
-          then
-            git checkout "${GITHUB_REF_NAME}"
+          if git ls-remote --heads origin "${{ steps.meta.outputs.deploy_branch }}" | grep -q "${{ steps.meta.outputs.deploy_branch }}"; then
+            git checkout "${{ steps.meta.outputs.deploy_branch }}"
           else
             git checkout main
           fi
-
 
       - name: Login to GHCR
         uses: docker/login-action@v3
@@ -67,7 +75,6 @@ jobs:
           registry: ghcr.io
           username: ${{ secrets.GIT_USERNAME }}
           password: ${{ secrets.GHCR_TOKEN_ARGOCD }}
-
 
       - name: Build and push frontend
         uses: docker/build-push-action@v6
@@ -78,7 +85,6 @@ jobs:
             ghcr.io/chr-devops/app-frontend:${{ steps.meta.outputs.image_tag }}
             ghcr.io/chr-devops/app-frontend:latest
 
-
       - name: Build and push backend
         uses: docker/build-push-action@v6
         with:
@@ -88,68 +94,57 @@ jobs:
             ghcr.io/chr-devops/app-backend:${{ steps.meta.outputs.image_tag }}
             ghcr.io/chr-devops/app-backend:latest
 
-
-
   update-staging-manifests:
-
     runs-on: ubuntu-latest
     needs: build-and-push-images
 
     steps:
-
       - name: Checkout infrastructure branch
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ github.ref_name }}
-
+          ref: ${{ needs.build-and-push-images.outputs.deploy_branch }}
 
       - name: Install yq
+        shell: bash
         run: |
           sudo wget -qO /usr/local/bin/yq \
-          https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
+            https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
           sudo chmod +x /usr/local/bin/yq
 
-
       - name: Update image tags
+        shell: bash
         run: |
-
           yq -i '
             (.images[] | select(.name == "ghcr.io/chr-devops/app-backend") | .newTag)
             = "${{ needs.build-and-push-images.outputs.image_tag }}"
           ' kubernetes/staging/kustomization.yaml
-
 
           yq -i '
             (.images[] | select(.name == "ghcr.io/chr-devops/app-frontend") | .newTag)
             = "${{ needs.build-and-push-images.outputs.image_tag }}"
           ' kubernetes/staging/kustomization.yaml
 
-
       - name: Commit changes
+        shell: bash
         run: |
           git config user.name github-actions
           git config user.email github-actions@github.com
 
           git add kubernetes/staging/kustomization.yaml
-
-          git commit -m "staging deploy ${GITHUB_REF_NAME}" || true
-
-          git push origin HEAD:${GITHUB_REF_NAME}
-
-
+          git commit -m "staging deploy ${{ needs.build-and-push-images.outputs.deploy_branch }}" || true
+          git push origin HEAD:${{ needs.build-and-push-images.outputs.deploy_branch }}
 
   point-staging-argocd-to-branch:
-
     runs-on: ubuntu-latest
-    needs: update-staging-manifests
+    needs:
+      - build-and-push-images
+      - update-staging-manifests
 
     outputs:
       staging_ip: ${{ steps.staging-ip.outputs.ip }}
 
     steps:
-
-
       - name: Configure AWS
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -157,111 +152,85 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: eu-central-1
 
-
-
       - name: Get staging public IP
         id: staging-ip
+        shell: bash
         run: |
-
           IP=$(aws ec2 describe-instances \
             --filters \
             "Name=tag:Name,Values=k8s-dev-staging" \
             "Name=instance-state-name,Values=running" \
-            --query \
-            "Reservations[0].Instances[0].PublicIpAddress" \
+            --query "Reservations[0].Instances[0].PublicIpAddress" \
             --output text)
 
-          if [ -z "$IP" ] || [ "$IP" = "None" ]
-          then
+          if [ -z "$IP" ] || [ "$IP" = "None" ]; then
             echo "Instance not ready"
             exit 1
           fi
 
           echo "ip=$IP" >> "$GITHUB_OUTPUT"
 
-
-
       - name: Prepare SSH key
+        shell: bash
         run: |
-
           mkdir -p ~/.ssh
-
           echo "${{ secrets.DEV_STAGING_EC2_SSH_KEY }}" > ~/.ssh/staging.pem
-
           chmod 600 ~/.ssh/staging.pem
 
-
-          for i in {1..30}
-          do
-            if ssh-keyscan -T 10 \
-              -H ${{ steps.staging-ip.outputs.ip }} \
-              >> ~/.ssh/known_hosts 2>/dev/null
-            then
+          for i in {1..30}; do
+            if ssh-keyscan -T 10 -H ${{ steps.staging-ip.outputs.ip }} >> ~/.ssh/known_hosts 2>/dev/null; then
               echo "SSH ready"
               exit 0
             fi
-
             sleep 10
           done
 
           exit 1
 
-
-
       - name: Wait for SSH login
+        shell: bash
         run: |
-
-          for i in {1..30}
-          do
+          for i in {1..30}; do
             if ssh \
               -o BatchMode=yes \
               -o StrictHostKeyChecking=yes \
               -o ConnectTimeout=10 \
               -i ~/.ssh/staging.pem \
               ubuntu@${{ steps.staging-ip.outputs.ip }} \
-              'echo ok' >/dev/null 2>&1
-            then
-              echo OK
+              'echo ok' >/dev/null 2>&1; then
+              echo "OK"
               exit 0
             fi
-
             sleep 10
           done
 
           exit 1
 
-
-
       - name: Patch staging ArgoCD
+        shell: bash
         run: |
-
           ssh \
-          -o BatchMode=yes \
-          -o StrictHostKeyChecking=yes \
-          -i ~/.ssh/staging.pem \
-          ubuntu@${{ steps.staging-ip.outputs.ip }} <<EOF
-
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -i ~/.ssh/staging.pem \
+            ubuntu@${{ steps.staging-ip.outputs.ip }} <<EOF
           set -e
 
           sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl -n argocd patch application staging-app \
-          --type merge \
-          -p '{
-            "spec":{
-              "source":{
-                "targetRevision":"${GITHUB_REF_NAME}"
+            --type merge \
+            -p '{
+              "spec":{
+                "source":{
+                  "targetRevision":"${{ needs.build-and-push-images.outputs.deploy_branch }}"
+                }
               }
-            }
-          }'
+            }'
 
-          sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl  -n argocd annotate application staging-app \
-          deploy-ts="$(date +%s)" --overwrite
-
+          sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl -n argocd annotate application staging-app \
+            deploy-ts="$(date +%s)" --overwrite
           EOF
 
-
-
   wait-for-staging:
-
     runs-on: ubuntu-latest
     needs: point-staging-argocd-to-branch
 
@@ -269,106 +238,92 @@ jobs:
       staging_ip: ${{ needs.point-staging-argocd-to-branch.outputs.staging_ip }}
 
     steps:
-
       - name: Wait backend
+        shell: bash
         run: |
-
-          for i in {1..60}
-          do
-            if curl -fsS \
-            http://${{ needs.point-staging-argocd-to-branch.outputs.staging_ip }}/api/health
-            then
+          for i in {1..60}; do
+            if curl -fsS http://${{ needs.point-staging-argocd-to-branch.outputs.staging_ip }}/api/health; then
               exit 0
             fi
-
             sleep 10
           done
 
           exit 1
-
-
 
       - name: Wait frontend
+        shell: bash
         run: |
-
-          for i in {1..60}
-          do
-            if curl -fsS \
-            http://${{ needs.point-staging-argocd-to-branch.outputs.staging_ip }}/
-            then
+          for i in {1..60}; do
+            if curl -fsS http://${{ needs.point-staging-argocd-to-branch.outputs.staging_ip }}/; then
               exit 0
             fi
-
             sleep 10
           done
 
           exit 1
 
-
-
   integration-tests:
-
     runs-on: ubuntu-latest
-    needs: wait-for-staging
+    needs:
+      - build-and-push-images
+      - wait-for-staging
 
     steps:
-
       - name: Checkout frontend
+        shell: bash
         run: |
           git clone https://github.com/CHR-DevOps/app-frontend.git app-frontend
           cd app-frontend
           git fetch origin
 
-          if git ls-remote --heads origin "${GITHUB_REF_NAME}" | grep -q "${GITHUB_REF_NAME}"
-          then
-            git checkout "${GITHUB_REF_NAME}"
+          if git ls-remote --heads origin "${{ needs.build-and-push-images.outputs.deploy_branch }}" | grep -q "${{ needs.build-and-push-images.outputs.deploy_branch }}"; then
+            git checkout "${{ needs.build-and-push-images.outputs.deploy_branch }}"
           else
             git checkout main
           fi
 
-
       - name: Checkout backend
+        shell: bash
         run: |
           git clone https://github.com/CHR-DevOps/app-backend.git app-backend
           cd app-backend
           git fetch origin
 
-          if git ls-remote --heads origin "${GITHUB_REF_NAME}" | grep -q "${GITHUB_REF_NAME}"
-          then
-            git checkout "${GITHUB_REF_NAME}"
+          if git ls-remote --heads origin "${{ needs.build-and-push-images.outputs.deploy_branch }}" | grep -q "${{ needs.build-and-push-images.outputs.deploy_branch }}"; then
+            git checkout "${{ needs.build-and-push-images.outputs.deploy_branch }}"
           else
             git checkout main
           fi
 
-
-      - uses: actions/setup-node@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
           node-version: 20
 
-
-      - run: npm ci
+      - name: Install frontend deps
+        run: npm ci
         working-directory: app-frontend
 
-
-      - run: npx playwright install --with-deps
+      - name: Install frontend Playwright browsers
+        run: npx playwright install --with-deps
         working-directory: app-frontend
 
-
-      - run: npm run test:e2e
+      - name: Run frontend e2e
+        run: npm run test:e2e
         working-directory: app-frontend
         env:
           PLAYWRIGHT_BASE_URL: http://${{ needs.wait-for-staging.outputs.staging_ip }}
 
-
-      - run: npm ci
+      - name: Install backend deps
+        run: npm ci
         working-directory: app-backend
 
-
-      - run: npx playwright install --with-deps
+      - name: Install backend Playwright browsers
+        run: npx playwright install --with-deps
         working-directory: app-backend
 
-
-      - run: npm run test:e2e
+      - name: Run backend e2e
+        run: npm run test:e2e
         working-directory: app-backend
         env:
           PLAYWRIGHT_BASE_URL: http://${{ needs.wait-for-staging.outputs.staging_ip }}/api
