@@ -264,7 +264,8 @@ jobs:
           }
 
           wait_for_endpoints backend-preview
-          $KUBECTL -n prod port-forward svc/backend-preview 5001:5000 >/tmp/backend-preview-port-forward.log 2>&1 &
+          nohup bash -lc "$KUBECTL -n prod port-forward svc/backend-preview 5001:5000" \
+            >/tmp/backend-preview-port-forward.log 2>&1 </dev/null &
           BACKEND_PF_PID=$!
           wait_for_port_forward http://127.0.0.1:5001/api/health /tmp/backend-preview-port-forward.log
 
@@ -280,7 +281,8 @@ jobs:
           curl -fsS http://127.0.0.1:5001/api/data | grep -q '^\['
 
           wait_for_endpoints frontend-preview
-          $KUBECTL -n prod port-forward svc/frontend-preview 3001:3000 >/tmp/frontend-preview-port-forward.log 2>&1 &
+          nohup bash -lc "$KUBECTL -n prod port-forward svc/frontend-preview 3001:3000" \
+            >/tmp/frontend-preview-port-forward.log 2>&1 </dev/null &
           FRONTEND_PF_PID=$!
           wait_for_port_forward http://127.0.0.1:3001/ /tmp/frontend-preview-port-forward.log
 
