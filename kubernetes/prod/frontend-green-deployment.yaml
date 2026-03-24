@@ -19,7 +19,7 @@ spec:
         - name: ghcr-secret
       containers:
         - name: frontend
-          image: ghcr.io/chr-devops/app-frontend:main-f16f42867d42355fb4c79fbdc68cbc3955087df2
+          image: ghcr.io/chr-devops/app-frontend:main-34fa4c10b1597b128bbecd46655ab8817d477e1b
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 3000
