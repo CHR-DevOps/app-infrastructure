@@ -300,20 +300,7 @@ jobs:
         with:
           node-version: 20
 
-      - name: Install frontend deps
-        run: npm ci
-        working-directory: app-frontend
-
-      - name: Install frontend Playwright browsers
-        run: npx playwright install --with-deps
-        working-directory: app-frontend
-
-      - name: Run frontend e2e
-        run: npm run test:e2e
-        working-directory: app-frontend
-        env:
-          PLAYWRIGHT_BASE_URL: http://${{ needs.wait-for-staging.outputs.staging_ip }}
-
+      
       - name: Install backend deps
         run: npm ci
         working-directory: app-backend
@@ -327,3 +314,17 @@ jobs:
         working-directory: app-backend
         env:
           PLAYWRIGHT_BASE_URL: http://${{ needs.wait-for-staging.outputs.staging_ip }}/api
+
+      - name: Install frontend deps
+        run: npm ci
+        working-directory: app-frontend
+
+      - name: Install frontend Playwright browsers
+        run: npx playwright install --with-deps
+        working-directory: app-frontend
+
+      - name: Run frontend e2e
+        run: npm run test:e2e
+        working-directory: app-frontend
+        env:
+          PLAYWRIGHT_BASE_URL: http://${{ needs.wait-for-staging.outputs.staging_ip }}
