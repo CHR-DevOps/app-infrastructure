@@ -229,12 +229,24 @@ jobs:
         run: |
           ssh \
             -o BatchMode=yes \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=10 \
             -o StrictHostKeyChecking=yes \
             -i ~/.ssh/staging.pem \
             ubuntu@${{ steps.staging-ip.outputs.ip }} <<EOF
-          set -e
+          set -euo pipefail
 
-          sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl -n argocd patch application staging-app \
+          kubectl_retry() {
+            for i in {1..5}; do
+              if sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl --request-timeout=30s "\$@"; then
+                return 0
+              fi
+              sleep 5
+            done
+            return 1
+          }
+
+          kubectl_retry -n argocd patch application staging-app \
             --type merge \
             -p '{
               "spec":{
@@ -244,7 +256,7 @@ jobs:
               }
             }'
 
-          sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl -n argocd annotate application staging-app \
+          kubectl_retry -n argocd annotate application staging-app \
             deploy-ts="$(date +%s)" --overwrite
           EOF
 
