@@ -1,188 +1,159 @@
 name: Production Deploy
 
 on:
-workflow_dispatch:
-inputs:
-deploy_branch:
-description: Infrastructure/app branch to deploy to production
-required: true
-default: main
-image_tag:
-description: Image tag to promote to prod
-required: true
-default: latest
+  workflow_dispatch:
+    inputs:
+      deploy_branch:
+        description: Infrastructure/app branch to deploy to production
+        required: true
+        default: main
+      image_tag:
+        description: Image tag to promote to prod
+        required: true
+        default: latest
 
 permissions:
-contents: write
+  contents: write
 
 jobs:
+  update-prod-manifests:
+    runs-on: ubuntu-latest
+    outputs:
+      deploy_branch: ${{ steps.vars.outputs.deploy_branch }}
 
-update-prod-manifests:
-runs-on: ubuntu-latest
+    steps:
+      - name: Checkout infrastructure repo
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.deploy_branch }}
 
-```
-outputs:
-  deploy_branch: ${{ steps.vars.outputs.deploy_branch }}
+      - name: Set variables
+        id: vars
+        run: |
+          echo "deploy_branch=${{ github.event.inputs.deploy_branch }}" >> $GITHUB_OUTPUT
+          echo "IMAGE_TAG=${{ github.event.inputs.image_tag }}" >> $GITHUB_ENV
 
-steps:
+      - name: Update backend prod image tag
+        run: |
+          sed -i "s|image: .*app-backend:.*|image: ghcr.io/chr-devops/app-backend:${IMAGE_TAG}|g" kubernetes/prod/backend-rollout.yaml
 
-  - name: Checkout infrastructure repo
-    uses: actions/checkout@v4
-    with:
-      ref: ${{ github.event.inputs.deploy_branch }}
+      - name: Update frontend prod image tag
+        run: |
+          sed -i "s|image: .*app-frontend:.*|image: ghcr.io/chr-devops/app-frontend:${IMAGE_TAG}|g" kubernetes/prod/frontend-rollout.yaml
 
-  - name: Set variables
-    id: vars
-    run: |
-      echo "deploy_branch=${{ github.event.inputs.deploy_branch }}" >> $GITHUB_OUTPUT
-      echo "IMAGE_TAG=${{ github.event.inputs.image_tag }}" >> $GITHUB_ENV
+      - name: Commit updated prod manifests
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
 
+          git add \
+            kubernetes/prod/backend-rollout.yaml \
+            kubernetes/prod/frontend-rollout.yaml
 
-  - name: Update backend prod image tag
-    run: |
-      sed -i "s|image: .*app-backend:.*|image: ghcr.io/chr-devops/app-backend:${IMAGE_TAG}|g" kubernetes/prod/backend-rollout.yaml
+          git diff --cached --quiet || \
+          git commit -m "Promote prod images to tag ${IMAGE_TAG}"
 
+      - name: Push changes
+        run: |
+          git push origin HEAD:${{ github.event.inputs.deploy_branch }}
 
-  - name: Update frontend prod image tag
-    run: |
-      sed -i "s|image: .*app-frontend:.*|image: ghcr.io/chr-devops/app-frontend:${IMAGE_TAG}|g" kubernetes/prod/frontend-rollout.yaml
+  point-prod-argocd-to-branch:
+    runs-on: ubuntu-latest
+    needs: update-prod-manifests
+    outputs:
+      prod_ip: ${{ steps.prod-ip.outputs.ip }}
 
+    steps:
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
 
-  - name: Commit updated prod manifests
-    run: |
-      git config user.name github-actions
-      git config user.email github-actions@github.com
+      - name: Get prod public IP
+        id: prod-ip
+        run: |
+          IP=$(aws ec2 describe-instances \
+            --filters "Name=tag:Name,Values=prod*" \
+                      "Name=instance-state-name,Values=running" \
+            --query "Reservations[].Instances[].PublicIpAddress" \
+            --output text | head -n 1)
 
-      git add \
-        kubernetes/prod/backend-rollout.yaml \
-        kubernetes/prod/frontend-rollout.yaml
+          echo "ip=$IP" >> $GITHUB_OUTPUT
 
-      git diff --cached --quiet || \
-      git commit -m "Promote prod images to tag ${IMAGE_TAG}"
+      - name: Prepare SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.PROD_SSH_PRIVATE_KEY }}" > ~/.ssh/prod.pem
+          chmod 600 ~/.ssh/prod.pem
 
+      - name: Patch prod ArgoCD
+        run: |
+          ssh -o StrictHostKeyChecking=no \
+              -i ~/.ssh/prod.pem \
+              ubuntu@${{ steps.prod-ip.outputs.ip }} <<EOF
+          set -e
 
-  - name: Push changes
-    run: |
-      git push origin HEAD:${{ github.event.inputs.deploy_branch }}
-```
+          sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl -n argocd patch application prod-app \
+            --type merge \
+            -p '{
+              "spec":{
+                "source":{
+                  "targetRevision":"${{ needs.update-prod-manifests.outputs.deploy_branch }}"
+                }
+              }
+            }'
 
-point-prod-argocd-to-branch:
-runs-on: ubuntu-latest
-needs: update-prod-manifests
+          sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl -n argocd annotate application prod-app \
+            deploy-ts="$(date +%s)" --overwrite
+          EOF
 
-```
-outputs:
-  prod_ip: ${{ steps.prod-ip.outputs.ip }}
+  smoke-test-and-promote:
+    runs-on: ubuntu-latest
+    needs: point-prod-argocd-to-branch
 
-steps:
+    steps:
+      - name: Prepare SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.PROD_SSH_PRIVATE_KEY }}" > ~/.ssh/prod.pem
+          chmod 600 ~/.ssh/prod.pem
 
-  - name: Configure AWS
-    uses: aws-actions/configure-aws-credentials@v4
-    with:
-      aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-      aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-      aws-region: ${{ secrets.AWS_REGION }}
+      - name: Wait frontend
+        run: |
+          for i in {1..60}; do
+            if curl -fsS "http://${{ needs.point-prod-argocd-to-branch.outputs.prod_ip }}/" >/dev/null; then
+              exit 0
+            fi
+            sleep 10
+          done
+          exit 1
 
+      - name: Wait backend
+        run: |
+          for i in {1..60}; do
+            if curl -fsS "http://${{ needs.point-prod-argocd-to-branch.outputs.prod_ip }}/api/health" >/dev/null; then
+              exit 0
+            fi
+            sleep 10
+          done
+          exit 1
 
-  - name: Get prod public IP
-    id: prod-ip
-    run: |
-      IP=$(aws ec2 describe-instances \
-        --filters "Name=tag:Name,Values=prod*" \
-                  "Name=instance-state-name,Values=running" \
-        --query "Reservations[].Instances[].PublicIpAddress" \
-        --output text | head -n 1)
+      - name: Promote backend rollout
+        run: |
+          ssh -o StrictHostKeyChecking=no \
+              -i ~/.ssh/prod.pem \
+              ubuntu@${{ needs.point-prod-argocd-to-branch.outputs.prod_ip }} <<'EOF'
+          sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl argo rollouts promote backend -n prod
+          sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl argo rollouts status backend -n prod --timeout 180s
+          EOF
 
-      echo "ip=$IP" >> $GITHUB_OUTPUT
-
-
-  - name: Prepare SSH key
-    run: |
-      mkdir -p ~/.ssh
-      echo "${{ secrets.PROD_SSH_PRIVATE_KEY }}" > ~/.ssh/prod.pem
-      chmod 600 ~/.ssh/prod.pem
-
-
-  - name: Patch prod ArgoCD
-    run: |
-      ssh -o StrictHostKeyChecking=no \
-          -i ~/.ssh/prod.pem \
-          ubuntu@${{ steps.prod-ip.outputs.ip }} <<EOF
-
-      set -e
-
-      sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl -n argocd patch application prod-app \
-        --type merge \
-        -p '{
-          "spec":{
-            "source":{
-              "targetRevision":"${{ needs.update-prod-manifests.outputs.deploy_branch }}"
-            }
-          }
-        }'
-
-      sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl -n argocd annotate application prod-app \
-        deploy-ts="$(date +%s)" --overwrite
-
-      EOF
-```
-
-smoke-test-and-promote:
-runs-on: ubuntu-latest
-needs: point-prod-argocd-to-branch
-
-```
-steps:
-
-  - name: Prepare SSH key
-    run: |
-      mkdir -p ~/.ssh
-      echo "${{ secrets.PROD_SSH_PRIVATE_KEY }}" > ~/.ssh/prod.pem
-      chmod 600 ~/.ssh/prod.pem
-
-
-  - name: Wait frontend
-    run: |
-      for i in {1..60}; do
-        if curl -fsS "http://${{ needs.point-prod-argocd-to-branch.outputs.prod_ip }}/" >/dev/null; then
-          exit 0
-        fi
-        sleep 10
-      done
-      exit 1
-
-
-  - name: Wait backend
-    run: |
-      for i in {1..60}; do
-        if curl -fsS "http://${{ needs.point-prod-argocd-to-branch.outputs.prod_ip }}/api/health" >/dev/null; then
-          exit 0
-        fi
-        sleep 10
-      done
-      exit 1
-
-
-  - name: Promote backend rollout
-    run: |
-      ssh -o StrictHostKeyChecking=no \
-          -i ~/.ssh/prod.pem \
-          ubuntu@${{ needs.point-prod-argocd-to-branch.outputs.prod_ip }} <<'EOF'
-
-      sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl argo rollouts promote backend -n prod
-      sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl argo rollouts status backend -n prod --timeout 180s
-
-      EOF
-
-
-  - name: Promote frontend rollout
-    run: |
-      ssh -o StrictHostKeyChecking=no \
-          -i ~/.ssh/prod.pem \
-          ubuntu@${{ needs.point-prod-argocd-to-branch.outputs.prod_ip }} <<'EOF'
-
-      sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl argo rollouts promote frontend -n prod
-      sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl argo rollouts status frontend -n prod --timeout 180s
-
-      EOF
-```
+      - name: Promote frontend rollout
+        run: |
+          ssh -o StrictHostKeyChecking=no \
+              -i ~/.ssh/prod.pem \
+              ubuntu@${{ needs.point-prod-argocd-to-branch.outputs.prod_ip }} <<'EOF'
+          sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl argo rollouts promote frontend -n prod
+          sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl argo rollouts status frontend -n prod --timeout 180s
+          EOF
