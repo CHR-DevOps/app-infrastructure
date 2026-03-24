@@ -8,9 +8,9 @@ on:
         required: true
         default: main
       image_tag:
-        description: Image tag to promote to prod
+        description: Immutable image tag from a successful staging deploy
         required: true
-        default: latest
+        default: ""
       argo_app:
         description: Argo CD production app to update
         required: true
