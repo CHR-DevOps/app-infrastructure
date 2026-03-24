@@ -15,6 +15,6 @@ resources:
   - frontend/service.yaml
 images:
   - name: ghcr.io/chr-devops/app-backend
-    newTag: main-fe5506136e5d921b8b0ab9fb819ea12f005d08c1
+    newTag: smart-deploy-8ca41c31accdfb27f90d0f54a2095ea05c2763fb
   - name: ghcr.io/chr-devops/app-frontend
-    newTag: main-fe5506136e5d921b8b0ab9fb819ea12f005d08c1
+    newTag: smart-deploy-8ca41c31accdfb27f90d0f54a2095ea05c2763fb

@@ -19,7 +19,7 @@ spec:
       containers:
         - name: backend
           image: ghcr.io/chr-devops/app-backend:main-7fe8900afcc56d8619740f2a95d64a5420a0c764
-          imagePullPolicy: Always
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 5000
           env:
