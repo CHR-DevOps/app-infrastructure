@@ -3,7 +3,15 @@ name: Staging Deploy
 on:
   push:
     branches:
-      - '**'
+      - main
+      - release
+      - 'release/**'
+  workflow_dispatch:
+    inputs:
+      deploy_branch:
+        description: Branch to build and deploy to staging
+        required: true
+        default: main
   repository_dispatch:
     types:
       - backend-updated
@@ -13,7 +21,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: staging-${{ github.event.client_payload.branch || github.ref_name }}
+  group: staging-${{ github.event.client_payload.branch || github.event.inputs.deploy_branch || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
@@ -32,6 +40,8 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
             DEPLOY_BRANCH="${{ github.event.client_payload.branch }}"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            DEPLOY_BRANCH="${{ github.event.inputs.deploy_branch }}"
           else
             DEPLOY_BRANCH="${GITHUB_REF_NAME}"
           fi

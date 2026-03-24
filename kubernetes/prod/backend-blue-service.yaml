@@ -1,11 +1,12 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: backend-active
+  name: backend-blue
   namespace: prod
 spec:
   selector:
     app: backend
+    color: blue
   ports:
     - port: 5000
       targetPort: 5000

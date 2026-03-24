@@ -1,24 +1,25 @@
-apiVersion: argoproj.io/v1alpha1
-kind: Rollout
+apiVersion: apps/v1
+kind: Deployment
 metadata:
-  name: frontend
+  name: frontend-blue
   namespace: prod
 spec:
   replicas: 1
-  revisionHistoryLimit: 2
   selector:
     matchLabels:
       app: frontend
+      color: blue
   template:
     metadata:
       labels:
         app: frontend
+        color: blue
     spec:
       imagePullSecrets:
         - name: ghcr-secret
       containers:
         - name: frontend
-          image: ghcr.io/chr-devops/app-frontend:main-7fe8900afcc56d8619740f2a95d64a5420a0c764
+          image: ghcr.io/chr-devops/app-frontend:main-f16f42867d42355fb4c79fbdc68cbc3955087df2
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 3000
@@ -34,9 +35,3 @@ spec:
               port: 3000
             initialDelaySeconds: 20
             periodSeconds: 10
-  strategy:
-    blueGreen:
-      activeService: frontend-active
-      previewService: frontend-preview
-      autoPromotionEnabled: false
-      scaleDownDelaySeconds: 30

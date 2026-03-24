@@ -8,15 +8,12 @@ resources:
   - db/pvc.yaml
   - db/deployment.yaml
   - db/service.yaml
-  - backend-rollout.yaml
-  - frontend-rollout.yaml
-  - backend-active-service.yaml
-  - backend-preview-service.yaml
-  - frontend-active-service.yaml
-  - frontend-preview-service.yaml
+  - backend-blue-deployment.yaml
+  - backend-green-deployment.yaml
+  - frontend-blue-deployment.yaml
+  - frontend-green-deployment.yaml
+  - backend-blue-service.yaml
+  - backend-green-service.yaml
+  - frontend-blue-service.yaml
+  - frontend-green-service.yaml
   - ingress.yaml
-images:
-  - name: ghcr.io/chr-devops/app-backend
-    newTag: "main-f16f42867d42355fb4c79fbdc68cbc3955087df2"
-  - name: ghcr.io/chr-devops/app-frontend
-    newTag: "main-f16f42867d42355fb4c79fbdc68cbc3955087df2"
