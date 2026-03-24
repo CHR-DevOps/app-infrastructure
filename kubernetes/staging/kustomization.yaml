@@ -15,6 +15,6 @@ resources:
   - frontend/service.yaml
 images:
   - name: ghcr.io/chr-devops/app-backend
-    newTag: main-e2565443166a95feedd8533263ef9932d858b5cc
+    newTag: infra-deploy-wait-for-backend-e26eb9a380facb40f39b77b67117df13daf5027c
   - name: ghcr.io/chr-devops/app-frontend
-    newTag: main-e2565443166a95feedd8533263ef9932d858b5cc
+    newTag: infra-deploy-wait-for-backend-e26eb9a380facb40f39b77b67117df13daf5027c
