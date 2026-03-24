@@ -117,11 +117,22 @@ jobs:
     needs: build-and-push-images
 
     steps:
-      - name: Checkout infrastructure branch
+      - name: Checkout infrastructure branch if exists, else main
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ needs.build-and-push-images.outputs.deploy_branch }}
+          ref: main
+
+      - name: Switch to infrastructure branch if it exists
+        shell: bash
+        run: |
+          git fetch origin
+
+          if git ls-remote --heads origin "${{ needs.build-and-push-images.outputs.deploy_branch }}" | grep -q "${{ needs.build-and-push-images.outputs.deploy_branch }}"; then
+            git checkout "${{ needs.build-and-push-images.outputs.deploy_branch }}"
+          else
+            git checkout main
+          fi
 
       - name: Install yq
         shell: bash
