@@ -95,7 +95,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p ~/.ssh
-          printf '%s\n' "${{ secrets.PROD_SSH_PRIVATE_KEY }}" | tr -d '\r' > ~/.ssh/prod.pem
+          printf '%s\n' "${{ secrets.DEV_STAGING_EC2_SSH_KEY }}" | tr -d '\r' > ~/.ssh/prod.pem
           chmod 600 ~/.ssh/prod.pem
 
           for i in {1..30}; do
@@ -160,7 +160,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p ~/.ssh
-          printf '%s\n' "${{ secrets.PROD_SSH_PRIVATE_KEY }}" | tr -d '\r' > ~/.ssh/prod.pem
+          printf '%s\n' "${{ secrets.DEV_STAGING_EC2_SSH_KEY }}" | tr -d '\r' > ~/.ssh/prod.pem
           chmod 600 ~/.ssh/prod.pem
 
           for i in {1..30}; do
