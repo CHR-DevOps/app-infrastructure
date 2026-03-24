@@ -197,11 +197,60 @@ jobs:
           echo "Backend did not become ready in time"
           exit 1
 
+      - name: Check preview rollout readiness
+        shell: bash
+        run: |
+          ssh \
+            -o BatchMode=yes \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=10 \
+            -o StrictHostKeyChecking=yes \
+            -i ~/.ssh/prod.pem \
+            ubuntu@${{ needs.point-prod-argocd-to-branch.outputs.prod_ip }} <<'EOF'
+          set -euo pipefail
+
+          KUBECTL="sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl"
+
+          wait_for_preview_ready() {
+            service_name="$1"
+            app_name="$2"
+
+            for i in {1..60}; do
+              endpoints=$($KUBECTL -n prod get endpoints "$service_name" \
+                -o jsonpath='{range .subsets[*].addresses[*]}{.ip}{" "}{end}' 2>/dev/null || true)
+
+              if [ -n "$endpoints" ]; then
+                echo "$service_name ready endpoints: $endpoints"
+                return 0
+              fi
+
+              sleep 5
+            done
+
+            echo "Preview rollout for $app_name did not become ready"
+            $KUBECTL -n prod get rollout "$app_name" -o wide || true
+            $KUBECTL -n prod describe rollout "$app_name" || true
+            $KUBECTL -n prod get svc "$service_name" -o wide || true
+            $KUBECTL -n prod get endpoints "$service_name" -o yaml || true
+            $KUBECTL -n prod get pods -l app="$app_name" -o wide || true
+            for pod in $($KUBECTL -n prod get pods -l app="$app_name" -o jsonpath='{range .items[*]}{.metadata.name}{" "}{end}' 2>/dev/null || true); do
+              echo "--- describe pod: $pod ---"
+              $KUBECTL -n prod describe pod "$pod" || true
+            done
+            exit 1
+          }
+
+          wait_for_preview_ready backend-preview backend
+          wait_for_preview_ready frontend-preview frontend
+          EOF
+
       - name: Smoke test preview services
         shell: bash
         run: |
           ssh \
             -o BatchMode=yes \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=10 \
             -o StrictHostKeyChecking=yes \
             -i ~/.ssh/prod.pem \
             ubuntu@${{ needs.point-prod-argocd-to-branch.outputs.prod_ip }} <<'EOF'
