@@ -225,8 +225,48 @@ jobs:
 
           trap cleanup EXIT
 
+          wait_for_endpoints() {
+            service_name="$1"
+
+            for i in {1..60}; do
+              endpoints=$($KUBECTL -n prod get endpoints "$service_name" \
+                -o jsonpath='{range .subsets[*].addresses[*]}{.ip}{" "}{end}' 2>/dev/null || true)
+
+              if [ -n "$endpoints" ]; then
+                echo "$service_name endpoints: $endpoints"
+                return 0
+              fi
+
+              sleep 5
+            done
+
+            echo "No ready endpoints found for $service_name"
+            $KUBECTL -n prod get svc "$service_name" -o wide || true
+            $KUBECTL -n prod get endpoints "$service_name" -o yaml || true
+            $KUBECTL -n prod get pods -o wide || true
+            return 1
+          }
+
+          wait_for_port_forward() {
+            url="$1"
+            log_file="$2"
+
+            for i in {1..30}; do
+              if curl -fsS "$url" >/dev/null; then
+                return 0
+              fi
+              sleep 5
+            done
+
+            echo "Port-forward never became ready for $url"
+            cat "$log_file" || true
+            return 1
+          }
+
+          wait_for_endpoints backend-preview
           $KUBECTL -n prod port-forward svc/backend-preview 5001:5000 >/tmp/backend-preview-port-forward.log 2>&1 &
           BACKEND_PF_PID=$!
+          wait_for_port_forward http://127.0.0.1:5001/api/health /tmp/backend-preview-port-forward.log
 
           for i in {1..30}; do
             if curl -fsS http://127.0.0.1:5001/api/health | grep -q '"status":"ok"'; then
@@ -239,8 +279,10 @@ jobs:
           curl -fsS http://127.0.0.1:5001/api/health | grep -q '"status":"ok"'
           curl -fsS http://127.0.0.1:5001/api/data | grep -q '^\['
 
+          wait_for_endpoints frontend-preview
           $KUBECTL -n prod port-forward svc/frontend-preview 3001:3000 >/tmp/frontend-preview-port-forward.log 2>&1 &
           FRONTEND_PF_PID=$!
+          wait_for_port_forward http://127.0.0.1:3001/ /tmp/frontend-preview-port-forward.log
 
           for i in {1..30}; do
             if curl -fsS http://127.0.0.1:3001/ | grep -q 'Data List'; then
