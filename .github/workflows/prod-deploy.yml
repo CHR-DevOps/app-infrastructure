@@ -14,7 +14,7 @@ on:
       argo_app:
         description: Argo CD production app to update
         required: true
-        default: prod-blue-app
+        default: prod-app
 
 permissions:
   contents: write
