@@ -37,21 +37,31 @@ jobs:
           echo "deploy_branch=${{ github.event.inputs.deploy_branch }}" >> $GITHUB_OUTPUT
           echo "IMAGE_TAG=${{ github.event.inputs.image_tag }}" >> $GITHUB_ENV
 
-      - name: Update backend prod image tag
+      - name: Install yq
+        shell: bash
         run: |
-          sed -i "s|image: .*app-backend:.*|image: ghcr.io/chr-devops/app-backend:${IMAGE_TAG}|g" kubernetes/prod/backend-rollout.yaml
+          sudo wget -qO /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
 
-      - name: Update frontend prod image tag
+      - name: Update prod image tags
+        shell: bash
         run: |
-          sed -i "s|image: .*app-frontend:.*|image: ghcr.io/chr-devops/app-frontend:${IMAGE_TAG}|g" kubernetes/prod/frontend-rollout.yaml
+          yq -i '
+            (.images[] | select(.name == "ghcr.io/chr-devops/app-backend") | .newTag)
+            = strenv(IMAGE_TAG)
+          ' kubernetes/prod/kustomization.yaml
+
+          yq -i '
+            (.images[] | select(.name == "ghcr.io/chr-devops/app-frontend") | .newTag)
+            = strenv(IMAGE_TAG)
+          ' kubernetes/prod/kustomization.yaml
 
       - name: Commit updated prod manifests
         run: |
           git config user.name github-actions
           git config user.email github-actions@github.com
-          git add \
-            kubernetes/prod/backend-rollout.yaml \
-            kubernetes/prod/frontend-rollout.yaml
+          git add kubernetes/prod/kustomization.yaml
           git diff --cached --quiet || git commit -m "Promote prod images to tag ${IMAGE_TAG}"
 
       - name: Push changes
