@@ -17,6 +17,6 @@ resources:
   - ingress.yaml
 images:
   - name: ghcr.io/chr-devops/app-backend
-    newTag: "1.0"
+    newTag: "1.1"
   - name: ghcr.io/chr-devops/app-frontend
-    newTag: "1.0"
+    newTag: "1.1"
