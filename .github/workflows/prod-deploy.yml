@@ -92,16 +92,49 @@ jobs:
           echo "ip=$IP" >> $GITHUB_OUTPUT
 
       - name: Prepare SSH key
+        shell: bash
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.PROD_SSH_PRIVATE_KEY }}" > ~/.ssh/prod.pem
+          printf '%s\n' "${{ secrets.PROD_SSH_PRIVATE_KEY }}" | tr -d '\r' > ~/.ssh/prod.pem
           chmod 600 ~/.ssh/prod.pem
 
-      - name: Patch prod ArgoCD
+          for i in {1..30}; do
+            if ssh-keyscan -T 10 -H ${{ steps.prod-ip.outputs.ip }} >> ~/.ssh/known_hosts 2>/dev/null; then
+              echo "SSH ready"
+              exit 0
+            fi
+            sleep 10
+          done
+
+          exit 1
+
+      - name: Wait for SSH login
+        shell: bash
         run: |
-          ssh -o StrictHostKeyChecking=no \
+          for i in {1..30}; do
+            if ssh \
+              -o BatchMode=yes \
+              -o StrictHostKeyChecking=yes \
+              -o ConnectTimeout=10 \
               -i ~/.ssh/prod.pem \
-              ubuntu@${{ steps.prod-ip.outputs.ip }} <<EOF
+              ubuntu@${{ steps.prod-ip.outputs.ip }} \
+              'echo ok' >/dev/null 2>&1; then
+              echo "OK"
+              exit 0
+            fi
+            sleep 10
+          done
+
+          exit 1
+
+      - name: Patch prod ArgoCD
+        shell: bash
+        run: |
+          ssh \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -i ~/.ssh/prod.pem \
+            ubuntu@${{ steps.prod-ip.outputs.ip }} <<EOF
           set -e
 
           sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl -n argocd patch application ${{ github.event.inputs.argo_app }} \
@@ -124,10 +157,21 @@ jobs:
 
     steps:
       - name: Prepare SSH key
+        shell: bash
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.PROD_SSH_PRIVATE_KEY }}" > ~/.ssh/prod.pem
+          printf '%s\n' "${{ secrets.PROD_SSH_PRIVATE_KEY }}" | tr -d '\r' > ~/.ssh/prod.pem
           chmod 600 ~/.ssh/prod.pem
+
+          for i in {1..30}; do
+            if ssh-keyscan -T 10 -H ${{ needs.point-prod-argocd-to-branch.outputs.prod_ip }} >> ~/.ssh/known_hosts 2>/dev/null; then
+              echo "SSH ready"
+              exit 0
+            fi
+            sleep 10
+          done
+
+          exit 1
 
       - name: Wait frontend
         run: |
@@ -154,19 +198,25 @@ jobs:
           exit 1
 
       - name: Promote backend rollout
+        shell: bash
         run: |
-          ssh -o StrictHostKeyChecking=no \
-              -i ~/.ssh/prod.pem \
-              ubuntu@${{ needs.point-prod-argocd-to-branch.outputs.prod_ip }} <<'EOF'
+          ssh \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -i ~/.ssh/prod.pem \
+            ubuntu@${{ needs.point-prod-argocd-to-branch.outputs.prod_ip }} <<'EOF'
           sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl argo rollouts promote backend -n prod
           sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl argo rollouts status backend -n prod --timeout 180s
           EOF
 
       - name: Promote frontend rollout
+        shell: bash
         run: |
-          ssh -o StrictHostKeyChecking=no \
-              -i ~/.ssh/prod.pem \
-              ubuntu@${{ needs.point-prod-argocd-to-branch.outputs.prod_ip }} <<'EOF'
+          ssh \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -i ~/.ssh/prod.pem \
+            ubuntu@${{ needs.point-prod-argocd-to-branch.outputs.prod_ip }} <<'EOF'
           sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl argo rollouts promote frontend -n prod
           sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl argo rollouts status frontend -n prod --timeout 180s
           EOF
