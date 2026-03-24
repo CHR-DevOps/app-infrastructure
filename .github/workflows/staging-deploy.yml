@@ -250,12 +250,7 @@ jobs:
           for i in {1..30}; do
             nodes_output=$(sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl get nodes --no-headers 2>/dev/null || true)
 
-            if [ -n "$nodes_output" ] && ! echo "$nodes_output" | awk '$2 != "Ready" { exit 1 }'; then
-              sleep 10
-              continue
-            fi
-
-            if [ -n "$nodes_output" ]; then
+            if [ -n "$nodes_output" ] && echo "$nodes_output" | awk '$2 != "Ready" { exit 1 }'; then
               echo "$nodes_output"
               exit 0
             fi
