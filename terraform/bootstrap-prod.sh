@@ -32,7 +32,7 @@ until /usr/local/bin/kubectl get nodes; do
   sleep 5
 done
 
-for ns in argocd prod argo-rollouts; do
+for ns in argocd prod; do
   /usr/local/bin/kubectl create namespace "$ns" --dry-run=client -o yaml | /usr/local/bin/kubectl apply -f -
 done
 
@@ -43,18 +43,6 @@ echo "Waiting for ArgoCD pods..."
 until /usr/local/bin/kubectl get pods -n argocd; do
   sleep 5
 done
-
-curl -L -o /tmp/argo-rollouts-install.yaml https://github.com/argoproj/argo-rollouts/releases/latest/download/install.yaml
-/usr/local/bin/kubectl apply -n argo-rollouts -f /tmp/argo-rollouts-install.yaml
-
-echo "Waiting for Argo Rollouts pods..."
-until /usr/local/bin/kubectl get pods -n argo-rollouts; do
-  sleep 5
-done
-
-curl -LO https://github.com/argoproj/argo-rollouts/releases/latest/download/kubectl-argo-rollouts-linux-amd64
-install -m 555 kubectl-argo-rollouts-linux-amd64 /usr/local/bin/kubectl-argo-rollouts
-rm -f kubectl-argo-rollouts-linux-amd64
 
 echo "Creating GHCR pull secret in prod..."
 /usr/local/bin/kubectl create secret docker-registry ghcr-secret \

@@ -20,59 +20,12 @@ permissions:
   contents: write
 
 jobs:
-  update-prod-manifests:
+  detect-prod-state:
     runs-on: ubuntu-latest
-    outputs:
-      deploy_branch: ${{ steps.vars.outputs.deploy_branch }}
-
-    steps:
-      - name: Checkout infrastructure repo
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.deploy_branch }}
-
-      - name: Set variables
-        id: vars
-        run: |
-          echo "deploy_branch=${{ github.event.inputs.deploy_branch }}" >> $GITHUB_OUTPUT
-          echo "IMAGE_TAG=${{ github.event.inputs.image_tag }}" >> $GITHUB_ENV
-
-      - name: Install yq
-        shell: bash
-        run: |
-          sudo wget -qO /usr/local/bin/yq \
-            https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
-          sudo chmod +x /usr/local/bin/yq
-
-      - name: Update prod image tags
-        shell: bash
-        run: |
-          yq -i '
-            (.images[] | select(.name == "ghcr.io/chr-devops/app-backend") | .newTag)
-            = strenv(IMAGE_TAG)
-          ' kubernetes/prod/kustomization.yaml
-
-          yq -i '
-            (.images[] | select(.name == "ghcr.io/chr-devops/app-frontend") | .newTag)
-            = strenv(IMAGE_TAG)
-          ' kubernetes/prod/kustomization.yaml
-
-      - name: Commit updated prod manifests
-        run: |
-          git config user.name github-actions
-          git config user.email github-actions@github.com
-          git add kubernetes/prod/kustomization.yaml
-          git diff --cached --quiet || git commit -m "Promote prod images to tag ${IMAGE_TAG}"
-
-      - name: Push changes
-        run: |
-          git push origin HEAD:${{ github.event.inputs.deploy_branch }}
-
-  point-prod-argocd-to-branch:
-    runs-on: ubuntu-latest
-    needs: update-prod-manifests
     outputs:
       prod_ip: ${{ steps.prod-ip.outputs.ip }}
+      active_color: ${{ steps.colors.outputs.active_color }}
+      idle_color: ${{ steps.colors.outputs.idle_color }}
 
     steps:
       - name: Configure AWS
@@ -84,6 +37,7 @@ jobs:
 
       - name: Get prod public IP
         id: prod-ip
+        shell: bash
         run: |
           IP=$(aws ec2 describe-instances \
             --filters \
@@ -92,14 +46,12 @@ jobs:
             --query "Reservations[0].Instances[0].PublicIpAddress" \
             --output text)
 
-          echo "Found prod IP: $IP"
-
           if [ -z "$IP" ] || [ "$IP" = "None" ]; then
             echo "Production instance not found or has no public IP"
             exit 1
           fi
 
-          echo "ip=$IP" >> $GITHUB_OUTPUT
+          echo "ip=$IP" >> "$GITHUB_OUTPUT"
 
       - name: Prepare SSH key
         shell: bash
@@ -118,52 +70,55 @@ jobs:
 
           exit 1
 
-      - name: Wait for SSH login
+      - name: Detect active and idle colors
+        id: colors
         shell: bash
         run: |
-          for i in {1..30}; do
-            if ssh \
-              -o BatchMode=yes \
-              -o StrictHostKeyChecking=yes \
-              -o ConnectTimeout=10 \
-              -i ~/.ssh/prod.pem \
-              ubuntu@${{ steps.prod-ip.outputs.ip }} \
-              'echo ok' >/dev/null 2>&1; then
-              echo "OK"
-              exit 0
-            fi
-            sleep 10
-          done
+          PROD_IP="${{ steps.prod-ip.outputs.ip }}"
 
-          exit 1
-
-      - name: Patch prod ArgoCD
-        shell: bash
-        run: |
-          ssh \
+          ACTIVE_COLOR=$(ssh \
             -o BatchMode=yes \
             -o StrictHostKeyChecking=yes \
             -i ~/.ssh/prod.pem \
-            ubuntu@${{ steps.prod-ip.outputs.ip }} <<EOF
-          set -e
+            ubuntu@"$PROD_IP" <<'EOF'
+          set -euo pipefail
+          KUBECTL="sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl"
 
-          sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl -n argocd patch application ${{ github.event.inputs.argo_app }} \
-            --type merge \
-            -p '{
-              "spec":{
-                "source":{
-                  "targetRevision":"${{ needs.update-prod-manifests.outputs.deploy_branch }}"
-                }
-              }
-            }'
+          BACKEND_SERVICE=$($KUBECTL -n prod get ingress prod-ingress -o jsonpath='{.spec.rules[0].http.paths[0].backend.service.name}')
+          FRONTEND_SERVICE=$($KUBECTL -n prod get ingress prod-ingress -o jsonpath='{.spec.rules[0].http.paths[1].backend.service.name}')
 
-          sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl -n argocd annotate application ${{ github.event.inputs.argo_app }} \
-            deploy-ts="$(date +%s)" --overwrite
+          case "$BACKEND_SERVICE:$FRONTEND_SERVICE" in
+            backend-blue:frontend-blue)
+              echo blue
+              ;;
+            backend-green:frontend-green)
+              echo green
+              ;;
+            *)
+              echo "Unexpected ingress backend mapping: $BACKEND_SERVICE / $FRONTEND_SERVICE" >&2
+              exit 1
+              ;;
+          esac
           EOF
+          )
 
-  smoke-test-and-promote:
+          if [ "$ACTIVE_COLOR" = "blue" ]; then
+            IDLE_COLOR="green"
+          else
+            IDLE_COLOR="blue"
+          fi
+
+          echo "Active color: $ACTIVE_COLOR"
+          echo "Idle color: $IDLE_COLOR"
+
+          echo "active_color=$ACTIVE_COLOR" >> "$GITHUB_OUTPUT"
+          echo "idle_color=$IDLE_COLOR" >> "$GITHUB_OUTPUT"
+
+  backup-prod-db:
     runs-on: ubuntu-latest
-    needs: point-prod-argocd-to-branch
+    needs: detect-prod-state
+    outputs:
+      backup_file: ${{ steps.backup.outputs.backup_file }}
 
     steps:
       - name: Prepare SSH key
@@ -174,7 +129,7 @@ jobs:
           chmod 600 ~/.ssh/prod.pem
 
           for i in {1..30}; do
-            if ssh-keyscan -T 10 -H ${{ needs.point-prod-argocd-to-branch.outputs.prod_ip }} >> ~/.ssh/known_hosts 2>/dev/null; then
+            if ssh-keyscan -T 10 -H ${{ needs.detect-prod-state.outputs.prod_ip }} >> ~/.ssh/known_hosts 2>/dev/null; then
               echo "SSH ready"
               exit 0
             fi
@@ -183,87 +138,222 @@ jobs:
 
           exit 1
 
-      - name: Wait frontend
-        run: |
-          for i in {1..60}; do
-            if curl -fsS "http://${{ needs.point-prod-argocd-to-branch.outputs.prod_ip }}/" >/dev/null; then
-              echo "Frontend is up"
-              exit 0
-            fi
-            sleep 10
-          done
-          echo "Frontend did not become ready in time"
-          exit 1
-
-      - name: Wait backend
-        run: |
-          for i in {1..60}; do
-            if curl -fsS "http://${{ needs.point-prod-argocd-to-branch.outputs.prod_ip }}/api/health" >/dev/null; then
-              echo "Backend is up"
-              exit 0
-            fi
-            sleep 10
-          done
-          echo "Backend did not become ready in time"
-          exit 1
-
-      - name: Check preview rollout readiness
+      - name: Backup production database
+        id: backup
         shell: bash
         run: |
-          ssh \
+          BACKUP_FILE=$(ssh \
             -o BatchMode=yes \
-            -o ServerAliveInterval=30 \
-            -o ServerAliveCountMax=10 \
             -o StrictHostKeyChecking=yes \
             -i ~/.ssh/prod.pem \
-            ubuntu@${{ needs.point-prod-argocd-to-branch.outputs.prod_ip }} <<'EOF'
+            ubuntu@${{ needs.detect-prod-state.outputs.prod_ip }} "bash -s" <<'EOF'
           set -euo pipefail
 
           KUBECTL="sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl"
+          POD_NAME=$($KUBECTL -n prod get pod -l app=mariadb -o jsonpath='{.items[0].metadata.name}')
+          TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+          BACKUP_FILE="/tmp/prod-mydb-${TIMESTAMP}.sql.gz"
 
-          wait_for_preview_ready() {
-            service_name="$1"
-            app_name="$2"
+          $KUBECTL -n prod exec "$POD_NAME" -- sh -lc '
+            MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysqldump -u root --databases mydb
+          ' | gzip -c > "$BACKUP_FILE"
 
-            for i in {1..60}; do
-              endpoints=$($KUBECTL -n prod get endpoints "$service_name" \
-                -o jsonpath='{range .subsets[*].addresses[*]}{.ip}{" "}{end}' 2>/dev/null || true)
-
-              if [ -n "$endpoints" ]; then
-                echo "$service_name ready endpoints: $endpoints"
-                return 0
-              fi
-
-              sleep 5
-            done
-
-            echo "Preview rollout for $app_name did not become ready"
-            $KUBECTL -n prod get rollout "$app_name" -o wide || true
-            $KUBECTL -n prod describe rollout "$app_name" || true
-            $KUBECTL -n prod get svc "$service_name" -o wide || true
-            $KUBECTL -n prod get endpoints "$service_name" -o yaml || true
-            $KUBECTL -n prod get pods -l app="$app_name" -o wide || true
-            for pod in $($KUBECTL -n prod get pods -l app="$app_name" -o jsonpath='{range .items[*]}{.metadata.name}{" "}{end}' 2>/dev/null || true); do
-              echo "--- describe pod: $pod ---"
-              $KUBECTL -n prod describe pod "$pod" || true
-            done
-            exit 1
-          }
-
-          wait_for_preview_ready backend-preview backend
-          wait_for_preview_ready frontend-preview frontend
+          test -s "$BACKUP_FILE"
+          echo "$BACKUP_FILE"
           EOF
+          )
 
-      - name: Smoke test preview services
+          echo "backup_file=$BACKUP_FILE" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "## Production DB backup"
+            echo ""
+            echo "- Backup file on prod EC2: \`$BACKUP_FILE\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  update-idle-manifests:
+    runs-on: ubuntu-latest
+    needs:
+      - detect-prod-state
+      - backup-prod-db
+    outputs:
+      deploy_branch: ${{ steps.vars.outputs.deploy_branch }}
+
+    steps:
+      - name: Checkout infrastructure repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.deploy_branch }}
+
+      - name: Set variables
+        id: vars
         shell: bash
         run: |
+          echo "deploy_branch=${{ github.event.inputs.deploy_branch }}" >> "$GITHUB_OUTPUT"
+          echo "IMAGE_TAG=${{ github.event.inputs.image_tag }}" >> "$GITHUB_ENV"
+          echo "IDLE_COLOR=${{ needs.detect-prod-state.outputs.idle_color }}" >> "$GITHUB_ENV"
+
+      - name: Install yq
+        shell: bash
+        run: |
+          sudo wget -qO /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Update idle color images
+        shell: bash
+        run: |
+          yq -i '
+            (.spec.template.spec.containers[] | select(.name == "backend") | .image)
+            = "ghcr.io/chr-devops/app-backend:" + strenv(IMAGE_TAG)
+          ' "kubernetes/prod/backend-${IDLE_COLOR}-deployment.yaml"
+
+          yq -i '
+            (.spec.template.spec.containers[] | select(.name == "frontend") | .image)
+            = "ghcr.io/chr-devops/app-frontend:" + strenv(IMAGE_TAG)
+          ' "kubernetes/prod/frontend-${IDLE_COLOR}-deployment.yaml"
+
+      - name: Commit updated idle manifests
+        shell: bash
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add \
+            "kubernetes/prod/backend-${IDLE_COLOR}-deployment.yaml" \
+            "kubernetes/prod/frontend-${IDLE_COLOR}-deployment.yaml"
+          git diff --cached --quiet || git commit -m "Deploy prod ${IDLE_COLOR} with image tag ${IMAGE_TAG}"
+
+      - name: Push changes
+        shell: bash
+        run: |
+          git push origin HEAD:${{ github.event.inputs.deploy_branch }}
+
+  point-prod-argocd-to-branch:
+    runs-on: ubuntu-latest
+    needs:
+      - detect-prod-state
+      - update-idle-manifests
+
+    steps:
+      - name: Prepare SSH key
+        shell: bash
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.DEV_STAGING_EC2_SSH_KEY }}" | tr -d '\r' > ~/.ssh/prod.pem
+          chmod 600 ~/.ssh/prod.pem
+
+          for i in {1..30}; do
+            if ssh-keyscan -T 10 -H ${{ needs.detect-prod-state.outputs.prod_ip }} >> ~/.ssh/known_hosts 2>/dev/null; then
+              echo "SSH ready"
+              exit 0
+            fi
+            sleep 10
+          done
+
+          exit 1
+
+      - name: Patch prod ArgoCD app
+        shell: bash
+        run: |
+          ssh \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -i ~/.ssh/prod.pem \
+            ubuntu@${{ needs.detect-prod-state.outputs.prod_ip }} <<EOF
+          set -euo pipefail
+
+          sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl -n argocd patch application ${{ github.event.inputs.argo_app }} \
+            --type merge \
+            -p '{
+              "spec":{
+                "source":{
+                  "targetRevision":"${{ needs.update-idle-manifests.outputs.deploy_branch }}"
+                }
+              }
+            }'
+
+          sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl -n argocd annotate application ${{ github.event.inputs.argo_app }} \
+            deploy-ts="$(date +%s)" --overwrite
+          EOF
+
+  wait-for-idle-rollout:
+    runs-on: ubuntu-latest
+    needs:
+      - detect-prod-state
+      - point-prod-argocd-to-branch
+
+    steps:
+      - name: Prepare SSH key
+        shell: bash
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.DEV_STAGING_EC2_SSH_KEY }}" | tr -d '\r' > ~/.ssh/prod.pem
+          chmod 600 ~/.ssh/prod.pem
+
+          for i in {1..30}; do
+            if ssh-keyscan -T 10 -H ${{ needs.detect-prod-state.outputs.prod_ip }} >> ~/.ssh/known_hosts 2>/dev/null; then
+              echo "SSH ready"
+              exit 0
+            fi
+            sleep 10
+          done
+
+          exit 1
+
+      - name: Wait for idle color deployments
+        shell: bash
+        run: |
+          IDLE_COLOR="${{ needs.detect-prod-state.outputs.idle_color }}"
+
+          ssh \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -i ~/.ssh/prod.pem \
+            ubuntu@${{ needs.detect-prod-state.outputs.prod_ip }} "IDLE_COLOR=${IDLE_COLOR} bash -s" <<'EOF'
+          set -euo pipefail
+          KUBECTL="sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl"
+
+          $KUBECTL -n prod rollout status deployment/backend-${IDLE_COLOR} --timeout=300s
+          $KUBECTL -n prod rollout status deployment/frontend-${IDLE_COLOR} --timeout=300s
+          EOF
+
+  smoke-test-idle:
+    runs-on: ubuntu-latest
+    needs:
+      - detect-prod-state
+      - wait-for-idle-rollout
+
+    steps:
+      - name: Prepare SSH key
+        shell: bash
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.DEV_STAGING_EC2_SSH_KEY }}" | tr -d '\r' > ~/.ssh/prod.pem
+          chmod 600 ~/.ssh/prod.pem
+
+          for i in {1..30}; do
+            if ssh-keyscan -T 10 -H ${{ needs.detect-prod-state.outputs.prod_ip }} >> ~/.ssh/known_hosts 2>/dev/null; then
+              echo "SSH ready"
+              exit 0
+            fi
+            sleep 10
+          done
+
+          exit 1
+
+      - name: Smoke test idle color services
+        shell: bash
+        run: |
+          IDLE_COLOR="${{ needs.detect-prod-state.outputs.idle_color }}"
+
           ssh \
             -o BatchMode=yes \
             -o ServerAliveInterval=30 \
             -o ServerAliveCountMax=10 \
             -o StrictHostKeyChecking=yes \
             -i ~/.ssh/prod.pem \
-            ubuntu@${{ needs.point-prod-argocd-to-branch.outputs.prod_ip }} <<'EOF'
+            ubuntu@${{ needs.detect-prod-state.outputs.prod_ip }} "IDLE_COLOR=${IDLE_COLOR} bash -s" <<'EOF'
           set -euo pipefail
 
           KUBECTL="sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl"
@@ -284,28 +374,6 @@ jobs:
 
           trap cleanup EXIT
 
-          wait_for_endpoints() {
-            service_name="$1"
-
-            for i in {1..60}; do
-              endpoints=$($KUBECTL -n prod get endpoints "$service_name" \
-                -o jsonpath='{range .subsets[*].addresses[*]}{.ip}{" "}{end}' 2>/dev/null || true)
-
-              if [ -n "$endpoints" ]; then
-                echo "$service_name endpoints: $endpoints"
-                return 0
-              fi
-
-              sleep 5
-            done
-
-            echo "No ready endpoints found for $service_name"
-            $KUBECTL -n prod get svc "$service_name" -o wide || true
-            $KUBECTL -n prod get endpoints "$service_name" -o yaml || true
-            $KUBECTL -n prod get pods -o wide || true
-            return 1
-          }
-
           wait_for_port_forward() {
             url="$1"
             log_file="$2"
@@ -322,60 +390,201 @@ jobs:
             return 1
           }
 
-          wait_for_endpoints backend-preview
-          nohup bash -lc "$KUBECTL -n prod port-forward svc/backend-preview 5001:5000" \
-            >/tmp/backend-preview-port-forward.log 2>&1 </dev/null &
+          nohup bash -lc "$KUBECTL -n prod port-forward svc/backend-${IDLE_COLOR} 5001:5000" \
+            >/tmp/backend-${IDLE_COLOR}-port-forward.log 2>&1 </dev/null &
           BACKEND_PF_PID=$!
-          wait_for_port_forward http://127.0.0.1:5001/api/health /tmp/backend-preview-port-forward.log
-
-          for i in {1..30}; do
-            if curl -fsS http://127.0.0.1:5001/api/health | grep -q '"status":"ok"'; then
-              echo "Preview backend health check passed"
-              break
-            fi
-            sleep 5
-          done
-
+          wait_for_port_forward http://127.0.0.1:5001/api/health /tmp/backend-${IDLE_COLOR}-port-forward.log
           curl -fsS http://127.0.0.1:5001/api/health | grep -q '"status":"ok"'
           curl -fsS http://127.0.0.1:5001/api/data | grep -q '^\['
 
-          wait_for_endpoints frontend-preview
-          nohup bash -lc "$KUBECTL -n prod port-forward svc/frontend-preview 3001:3000" \
-            >/tmp/frontend-preview-port-forward.log 2>&1 </dev/null &
+          nohup bash -lc "$KUBECTL -n prod port-forward svc/frontend-${IDLE_COLOR} 3001:3000" \
+            >/tmp/frontend-${IDLE_COLOR}-port-forward.log 2>&1 </dev/null &
           FRONTEND_PF_PID=$!
-          wait_for_port_forward http://127.0.0.1:3001/ /tmp/frontend-preview-port-forward.log
-
-          for i in {1..30}; do
-            if curl -fsS http://127.0.0.1:3001/ | grep -q 'Data List'; then
-              echo "Preview frontend smoke check passed"
-              break
-            fi
-            sleep 5
-          done
-
+          wait_for_port_forward http://127.0.0.1:3001/ /tmp/frontend-${IDLE_COLOR}-port-forward.log
           curl -fsS http://127.0.0.1:3001/ | grep -q 'Data List'
           EOF
 
-      - name: Promote backend rollout
+  switch-prod-traffic:
+    runs-on: ubuntu-latest
+    needs:
+      - detect-prod-state
+      - smoke-test-idle
+
+    steps:
+      - name: Checkout infrastructure repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.deploy_branch }}
+
+      - name: Install yq
+        shell: bash
+        run: |
+          sudo wget -qO /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Switch ingress traffic to idle color
+        shell: bash
+        run: |
+          IDLE_COLOR="${{ needs.detect-prod-state.outputs.idle_color }}"
+
+          yq -i '
+            (.spec.rules[0].http.paths[] | select(.path == "/api") | .backend.service.name)
+            = "backend-" + strenv(IDLE_COLOR)
+          ' kubernetes/prod/ingress.yaml
+
+          yq -i '
+            (.spec.rules[0].http.paths[] | select(.path == "/") | .backend.service.name)
+            = "frontend-" + strenv(IDLE_COLOR)
+          ' kubernetes/prod/ingress.yaml
+
+      - name: Commit switched traffic
+        shell: bash
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add kubernetes/prod/ingress.yaml
+          git diff --cached --quiet || git commit -m "Switch prod traffic to ${{ needs.detect-prod-state.outputs.idle_color }}"
+
+      - name: Push changes
+        shell: bash
+        run: |
+          git push origin HEAD:${{ github.event.inputs.deploy_branch }}
+
+      - name: Prepare SSH key
+        shell: bash
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.DEV_STAGING_EC2_SSH_KEY }}" | tr -d '\r' > ~/.ssh/prod.pem
+          chmod 600 ~/.ssh/prod.pem
+
+          for i in {1..30}; do
+            if ssh-keyscan -T 10 -H ${{ needs.detect-prod-state.outputs.prod_ip }} >> ~/.ssh/known_hosts 2>/dev/null; then
+              echo "SSH ready"
+              exit 0
+            fi
+            sleep 10
+          done
+
+          exit 1
+
+      - name: Trigger ArgoCD sync
         shell: bash
         run: |
           ssh \
             -o BatchMode=yes \
             -o StrictHostKeyChecking=yes \
             -i ~/.ssh/prod.pem \
-            ubuntu@${{ needs.point-prod-argocd-to-branch.outputs.prod_ip }} <<'EOF'
-          sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl argo rollouts promote backend -n prod
-          sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl argo rollouts status backend -n prod --timeout 180s
+            ubuntu@${{ needs.detect-prod-state.outputs.prod_ip }} <<EOF
+          set -euo pipefail
+          sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl -n argocd annotate application ${{ github.event.inputs.argo_app }} \
+            traffic-switch-ts="$(date +%s)" --overwrite
           EOF
 
-      - name: Promote frontend rollout
+      - name: Wait for public production endpoints
         shell: bash
         run: |
-          ssh \
-            -o BatchMode=yes \
-            -o StrictHostKeyChecking=yes \
-            -i ~/.ssh/prod.pem \
-            ubuntu@${{ needs.point-prod-argocd-to-branch.outputs.prod_ip }} <<'EOF'
-          sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl argo rollouts promote frontend -n prod
-          sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl argo rollouts status frontend -n prod --timeout 180s
+          PROD_IP="${{ needs.detect-prod-state.outputs.prod_ip }}"
+
+          for i in {1..60}; do
+            if curl -fsS "http://${PROD_IP}/api/health" | grep -q '"status":"ok"' &&
+               curl -fsS "http://${PROD_IP}/" | grep -q 'Data List'; then
+              echo "Production is serving the new color"
+              exit 0
+            fi
+            sleep 10
+          done
+
+          echo "Production did not become ready after traffic switch"
+          exit 1
+
+  monitor-and-rollback:
+    runs-on: ubuntu-latest
+    needs:
+      - detect-prod-state
+      - switch-prod-traffic
+
+    steps:
+      - name: Checkout infrastructure repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.deploy_branch }}
+
+      - name: Install yq
+        shell: bash
+        run: |
+          sudo wget -qO /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Prepare SSH key
+        shell: bash
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.DEV_STAGING_EC2_SSH_KEY }}" | tr -d '\r' > ~/.ssh/prod.pem
+          chmod 600 ~/.ssh/prod.pem
+
+          for i in {1..30}; do
+            if ssh-keyscan -T 10 -H ${{ needs.detect-prod-state.outputs.prod_ip }} >> ~/.ssh/known_hosts 2>/dev/null; then
+              echo "SSH ready"
+              exit 0
+            fi
+            sleep 10
+          done
+
+          exit 1
+
+      - name: Monitor production health and rollback on failure
+        shell: bash
+        run: |
+          PROD_IP="${{ needs.detect-prod-state.outputs.prod_ip }}"
+          ACTIVE_COLOR="${{ needs.detect-prod-state.outputs.active_color }}"
+
+          rollback() {
+            yq -i '
+              (.spec.rules[0].http.paths[] | select(.path == "/api") | .backend.service.name)
+              = "backend-" + strenv(ACTIVE_COLOR)
+            ' kubernetes/prod/ingress.yaml
+
+            yq -i '
+              (.spec.rules[0].http.paths[] | select(.path == "/") | .backend.service.name)
+              = "frontend-" + strenv(ACTIVE_COLOR)
+            ' kubernetes/prod/ingress.yaml
+
+            git config user.name github-actions
+            git config user.email github-actions@github.com
+            git add kubernetes/prod/ingress.yaml
+            git diff --cached --quiet || git commit -m "Rollback prod traffic to ${ACTIVE_COLOR}"
+            git push origin HEAD:${{ github.event.inputs.deploy_branch }}
+
+            ssh \
+              -o BatchMode=yes \
+              -o StrictHostKeyChecking=yes \
+              -i ~/.ssh/prod.pem \
+              ubuntu@"$PROD_IP" <<EOF
+            set -euo pipefail
+            sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl -n argocd annotate application ${{ github.event.inputs.argo_app }} \
+              rollback-ts="$(date +%s)" --overwrite
           EOF
+          }
+
+          for i in {1..60}; do
+            if ! curl -fsS "http://${PROD_IP}/api/health" | grep -q '"status":"ok"'; then
+              echo "Backend health check failed during monitoring window"
+              rollback
+              exit 1
+            fi
+
+            if ! curl -fsS "http://${PROD_IP}/" | grep -q 'Data List'; then
+              echo "Frontend smoke check failed during monitoring window"
+              rollback
+              exit 1
+            fi
+
+            echo "Production healthy at check $i/60"
+            sleep 10
+          done
+
+          echo "Production stayed healthy for 10 minutes after switch"

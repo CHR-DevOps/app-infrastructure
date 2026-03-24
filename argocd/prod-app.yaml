@@ -1,17 +1,17 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: prod-green-app
+  name: prod-app
   namespace: argocd
 spec:
   project: default
   source:
     repoURL: https://github.com/CHR-DevOps/app-infrastructure.git
     targetRevision: main
-    path: kubernetes/prod-green
+    path: kubernetes/prod
   destination:
     server: https://kubernetes.default.svc
-    namespace: prod-green
+    namespace: prod
   syncPolicy:
     automated:
       prune: true
