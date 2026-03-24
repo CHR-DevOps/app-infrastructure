@@ -77,10 +77,12 @@ jobs:
           PROD_IP="${{ steps.prod-ip.outputs.ip }}"
 
           ACTIVE_COLOR=$(ssh \
+            -q \
+            -T \
             -o BatchMode=yes \
             -o StrictHostKeyChecking=yes \
             -i ~/.ssh/prod.pem \
-            ubuntu@"$PROD_IP" <<'EOF'
+            ubuntu@"$PROD_IP" "bash --noprofile --norc -s" <<'EOF'
           set -euo pipefail
           KUBECTL="sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl"
 
@@ -143,10 +145,12 @@ jobs:
         shell: bash
         run: |
           BACKUP_FILE=$(ssh \
+            -q \
+            -T \
             -o BatchMode=yes \
             -o StrictHostKeyChecking=yes \
             -i ~/.ssh/prod.pem \
-            ubuntu@${{ needs.detect-prod-state.outputs.prod_ip }} "bash -s" <<'EOF'
+            ubuntu@${{ needs.detect-prod-state.outputs.prod_ip }} "bash --noprofile --norc -s" <<'EOF'
           set -euo pipefail
 
           KUBECTL="sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl"
