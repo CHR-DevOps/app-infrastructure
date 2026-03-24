@@ -24,6 +24,7 @@ jobs:
       image_tag: ${{ steps.meta.outputs.image_tag }}
       safe_branch: ${{ steps.meta.outputs.safe_branch }}
       deploy_branch: ${{ steps.meta.outputs.deploy_branch }}
+      staging_ip: ${{ steps.staging-ip.outputs.ip }}
 
     steps:
       - name: Generate metadata
@@ -42,6 +43,31 @@ jobs:
           echo "deploy_branch=${DEPLOY_BRANCH}" >> "$GITHUB_OUTPUT"
           echo "safe_branch=${SAFE_BRANCH}" >> "$GITHUB_OUTPUT"
           echo "image_tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: eu-central-1
+
+      - name: Get staging public IP
+        id: staging-ip
+        shell: bash
+        run: |
+          IP=$(aws ec2 describe-instances \
+            --filters \
+              "Name=tag:Name,Values=k8s-dev-staging" \
+              "Name=instance-state-name,Values=running" \
+            --query "Reservations[0].Instances[0].PublicIpAddress" \
+            --output text)
+
+          if [ -z "$IP" ] || [ "$IP" = "None" ]; then
+            echo "Instance not ready"
+            exit 1
+          fi
+
+          echo "ip=$IP" >> "$GITHUB_OUTPUT"
 
       - name: Checkout frontend branch if exists, else main
         shell: bash
@@ -81,6 +107,9 @@ jobs:
         with:
           context: ./app-frontend
           push: true
+          # Pass the staging IP so Next.js bakes the correct API URL into the build
+          build-args: |
+            NEXT_PUBLIC_API_URL=http://${{ steps.staging-ip.outputs.ip }}/api
           tags: |
             ghcr.io/chr-devops/app-frontend:${{ steps.meta.outputs.image_tag }}
             ghcr.io/chr-devops/app-frontend:latest
@@ -142,34 +171,9 @@ jobs:
       - update-staging-manifests
 
     outputs:
-      staging_ip: ${{ steps.staging-ip.outputs.ip }}
+      staging_ip: ${{ needs.build-and-push-images.outputs.staging_ip }}
 
     steps:
-      - name: Configure AWS
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: eu-central-1
-
-      - name: Get staging public IP
-        id: staging-ip
-        shell: bash
-        run: |
-          IP=$(aws ec2 describe-instances \
-            --filters \
-            "Name=tag:Name,Values=k8s-dev-staging" \
-            "Name=instance-state-name,Values=running" \
-            --query "Reservations[0].Instances[0].PublicIpAddress" \
-            --output text)
-
-          if [ -z "$IP" ] || [ "$IP" = "None" ]; then
-            echo "Instance not ready"
-            exit 1
-          fi
-
-          echo "ip=$IP" >> "$GITHUB_OUTPUT"
-
       - name: Prepare SSH key
         shell: bash
         run: |
@@ -178,7 +182,7 @@ jobs:
           chmod 600 ~/.ssh/staging.pem
 
           for i in {1..30}; do
-            if ssh-keyscan -T 10 -H ${{ steps.staging-ip.outputs.ip }} >> ~/.ssh/known_hosts 2>/dev/null; then
+            if ssh-keyscan -T 10 -H ${{ needs.build-and-push-images.outputs.staging_ip }} >> ~/.ssh/known_hosts 2>/dev/null; then
               echo "SSH ready"
               exit 0
             fi
@@ -196,7 +200,7 @@ jobs:
               -o StrictHostKeyChecking=yes \
               -o ConnectTimeout=10 \
               -i ~/.ssh/staging.pem \
-              ubuntu@${{ steps.staging-ip.outputs.ip }} \
+              ubuntu@${{ needs.build-and-push-images.outputs.staging_ip }} \
               'echo ok' >/dev/null 2>&1; then
               echo "OK"
               exit 0
@@ -213,7 +217,7 @@ jobs:
             -o BatchMode=yes \
             -o StrictHostKeyChecking=yes \
             -i ~/.ssh/staging.pem \
-            ubuntu@${{ steps.staging-ip.outputs.ip }} <<EOF
+            ubuntu@${{ needs.build-and-push-images.outputs.staging_ip }} <<EOF
           set -e
 
           sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl -n argocd patch application staging-app \
@@ -300,7 +304,8 @@ jobs:
         with:
           node-version: 20
 
-      
+      # ── BACKEND E2E (must run before frontend) ────────────────────────────
+
       - name: Install backend deps
         run: npm ci
         working-directory: app-backend
@@ -314,6 +319,8 @@ jobs:
         working-directory: app-backend
         env:
           PLAYWRIGHT_BASE_URL: http://${{ needs.wait-for-staging.outputs.staging_ip }}/api
+
+      # ── FRONTEND E2E (runs after backend is verified) ─────────────────────
 
       - name: Install frontend deps
         run: npm ci
