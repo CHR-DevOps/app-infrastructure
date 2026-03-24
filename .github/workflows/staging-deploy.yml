@@ -314,6 +314,7 @@ jobs:
         working-directory: app-backend
         env:
           PLAYWRIGHT_BASE_URL: http://${{ needs.wait-for-staging.outputs.staging_ip }}/api
+          EXPORTED_USER_FILE: /tmp/backend-created-user.txt
 
       - name: Install frontend deps
         run: npm ci
@@ -328,3 +329,4 @@ jobs:
         working-directory: app-frontend
         env:
           PLAYWRIGHT_BASE_URL: http://${{ needs.wait-for-staging.outputs.staging_ip }}
+          BACKEND_CREATED_USER_FILE: /tmp/backend-created-user.txt
