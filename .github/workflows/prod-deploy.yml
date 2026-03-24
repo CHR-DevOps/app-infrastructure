@@ -159,7 +159,20 @@ jobs:
           BACKUP_FILE="/tmp/prod-mydb-${TIMESTAMP}.sql.gz"
 
           $KUBECTL -n prod exec "$POD_NAME" -- sh -lc '
-            MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysqldump -u root --databases mydb
+            DUMP_BIN="${DUMP_BIN:-}"
+
+            if [ -z "$DUMP_BIN" ]; then
+              if command -v mariadb-dump >/dev/null 2>&1; then
+                DUMP_BIN="mariadb-dump"
+              elif command -v mysqldump >/dev/null 2>&1; then
+                DUMP_BIN="mysqldump"
+              else
+                echo "No MariaDB dump binary found" >&2
+                exit 1
+              fi
+            fi
+
+            MYSQL_PWD="$MYSQL_ROOT_PASSWORD" "$DUMP_BIN" -u root --databases mydb
           ' | gzip -c > "$BACKUP_FILE"
 
           test -s "$BACKUP_FILE"
