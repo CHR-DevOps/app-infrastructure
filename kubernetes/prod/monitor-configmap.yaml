@@ -1,0 +1,89 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prod-health-monitor
+  namespace: prod
+data:
+  monitor.sh: |
+    #!/bin/sh
+    set -eu
+
+    KUBECTL="kubectl -n prod"
+    STATE_DIR="/state"
+    FAILURE_THRESHOLD="${FAILURE_THRESHOLD:-3}"
+    SLEEP_SECONDS="${SLEEP_SECONDS:-60}"
+
+    mkdir -p "$STATE_DIR"
+
+    get_active_color() {
+      backend_service=$($KUBECTL get ingress prod-ingress -o jsonpath='{.spec.rules[0].http.paths[0].backend.service.name}')
+      frontend_service=$($KUBECTL get ingress prod-ingress -o jsonpath='{.spec.rules[0].http.paths[1].backend.service.name}')
+
+      case "${backend_service}:${frontend_service}" in
+        backend-blue:frontend-blue)
+          echo blue
+          ;;
+        backend-green:frontend-green)
+          echo green
+          ;;
+        *)
+          echo "Unexpected ingress mapping: ${backend_service} / ${frontend_service}" >&2
+          return 1
+          ;;
+      esac
+    }
+
+    increment_counter() {
+      name="$1"
+      file="${STATE_DIR}/${name}.failures"
+      count=0
+
+      if [ -f "$file" ]; then
+        count=$(cat "$file")
+      fi
+
+      count=$((count + 1))
+      echo "$count" > "$file"
+      echo "$count"
+    }
+
+    reset_counter() {
+      name="$1"
+      echo 0 > "${STATE_DIR}/${name}.failures"
+    }
+
+    restart_deployment() {
+      deployment="$1"
+      echo "Restarting ${deployment} after ${FAILURE_THRESHOLD} consecutive failures"
+      $KUBECTL rollout restart "deployment/${deployment}"
+    }
+
+    while true; do
+      active_color=$(get_active_color)
+      backend_url="http://backend-${active_color}.prod.svc.cluster.local:5000/api/health"
+      frontend_url="http://frontend-${active_color}.prod.svc.cluster.local:3000/"
+
+      if curl -fsS --max-time 10 "$backend_url" | grep -q '"status":"ok"'; then
+        reset_counter backend
+      else
+        backend_failures=$(increment_counter backend)
+        echo "Backend health check failed (${backend_failures}/${FAILURE_THRESHOLD}) for ${active_color}"
+        if [ "$backend_failures" -ge "$FAILURE_THRESHOLD" ]; then
+          restart_deployment "backend-${active_color}"
+          reset_counter backend
+        fi
+      fi
+
+      if curl -fsS --max-time 10 "$frontend_url" | grep -q 'Data List'; then
+        reset_counter frontend
+      else
+        frontend_failures=$(increment_counter frontend)
+        echo "Frontend health check failed (${frontend_failures}/${FAILURE_THRESHOLD}) for ${active_color}"
+        if [ "$frontend_failures" -ge "$FAILURE_THRESHOLD" ]; then
+          restart_deployment "frontend-${active_color}"
+          reset_counter frontend
+        fi
+      fi
+
+      sleep "$SLEEP_SECONDS"
+    done
