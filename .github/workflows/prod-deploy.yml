@@ -455,10 +455,21 @@ jobs:
             -o BatchMode=yes \
             -o StrictHostKeyChecking=yes \
             -i ~/.ssh/prod.pem \
-            ubuntu@${{ needs.detect-prod-state.outputs.prod_ip }} <<EOF
-          set -euo pipefail
-          sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl -n argocd annotate application ${{ github.event.inputs.argo_app }} \
-            traffic-switch-ts="$(date +%s)" --overwrite
+            ubuntu@${{ needs.detect-prod-state.outputs.prod_ip }} "ARGO_APP=${{ github.event.inputs.argo_app }} bash -s" <<'EOF'
+          KUBECTL="sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl"
+
+          for i in 1 2 3; do
+            if $KUBECTL -n argocd annotate application "$ARGO_APP" \
+                traffic-switch-ts="$(date +%s)" --overwrite --request-timeout=60s; then
+              echo "ArgoCD sync triggered"
+              exit 0
+            fi
+            echo "Attempt ${i} failed, retrying in 15s..."
+            sleep 15
+          done
+
+          echo "Warning: could not annotate ArgoCD app after 3 attempts — auto-sync will pick up the change within minutes"
+          exit 0
           EOF
 
       - name: Wait for public production endpoints
