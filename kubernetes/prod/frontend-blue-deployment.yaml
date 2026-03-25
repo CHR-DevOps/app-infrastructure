@@ -23,6 +23,9 @@ spec:
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 3000
+          env:
+            - name: DEPLOY_COLOR
+              value: "blue"
           readinessProbe:
             httpGet:
               path: /
