@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prod-health-monitor
+  namespace: prod
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prod-health-monitor
+  template:
+    metadata:
+      labels:
+        app: prod-health-monitor
+    spec:
+      serviceAccountName: prod-health-monitor
+      containers:
+        - name: monitor
+          image: alpine:3.20
+          command:
+            - /bin/sh
+            - -c
+            - apk add --no-cache curl kubectl >/dev/null && chmod +x /scripts/monitor.sh && /scripts/monitor.sh
+          env:
+            - name: FAILURE_THRESHOLD
+              value: "3"
+            - name: SLEEP_SECONDS
+              value: "60"
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+            - name: state
+              mountPath: /state
+      volumes:
+        - name: scripts
+          configMap:
+            name: prod-health-monitor
+            defaultMode: 0755
+        - name: state
+          emptyDir: {}

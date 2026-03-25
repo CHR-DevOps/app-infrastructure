@@ -17,3 +17,8 @@ resources:
   - frontend-blue-service.yaml
   - frontend-green-service.yaml
   - ingress.yaml
+  - monitor-serviceaccount.yaml
+  - monitor-role.yaml
+  - monitor-rolebinding.yaml
+  - monitor-configmap.yaml
+  - monitor-deployment.yaml
