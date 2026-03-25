@@ -476,13 +476,29 @@ jobs:
         shell: bash
         run: |
           PROD_IP="${{ needs.detect-prod-state.outputs.prod_ip }}"
+          IDLE_COLOR="${{ needs.detect-prod-state.outputs.idle_color }}"
 
           for i in {1..60}; do
-            if curl -fsS "http://${PROD_IP}/api/health" | grep -q '"status":"ok"' &&
-               curl -fsS "http://${PROD_IP}/" | grep -q 'Data List'; then
+            RESULT=$(ssh \
+              -q \
+              -T \
+              -o BatchMode=yes \
+              -o StrictHostKeyChecking=yes \
+              -i ~/.ssh/prod.pem \
+              ubuntu@"$PROD_IP" "IDLE_COLOR=${IDLE_COLOR} bash -s" <<'SSHEOF'
+            set -euo pipefail
+            KUBECTL="sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl"
+            HEALTH=$($KUBECTL -n prod exec deployment/backend-${IDLE_COLOR} -- wget -qO- http://localhost:5000/api/health 2>/dev/null || true)
+            FRONT=$($KUBECTL -n prod exec deployment/frontend-${IDLE_COLOR} -- wget -qO- http://localhost:3000/ 2>/dev/null || true)
+            echo "HEALTH=${HEALTH}"
+            echo "FRONT=${FRONT}"
+SSHEOF
+            )
+            if echo "$RESULT" | grep -q '"status":"ok"' && echo "$RESULT" | grep -q 'Data List'; then
               echo "Production is serving the new color"
               exit 0
             fi
+            echo "Attempt $i/60: not ready yet, retrying in 10s..."
             sleep 10
           done
 
@@ -529,10 +545,33 @@ jobs:
       - name: Monitor production health and rollback on failure
         shell: bash
         run: |
+          set -euo pipefail
           PROD_IP="${{ needs.detect-prod-state.outputs.prod_ip }}"
           ACTIVE_COLOR="${{ needs.detect-prod-state.outputs.active_color }}"
+          IDLE_COLOR="${{ needs.detect-prod-state.outputs.idle_color }}"
+          FAIL_COUNT=0
+          MAX_FAILS=3
+
+          check_health() {
+            ssh \
+              -q \
+              -T \
+              -o BatchMode=yes \
+              -o StrictHostKeyChecking=yes \
+              -i ~/.ssh/prod.pem \
+              ubuntu@"$PROD_IP" "IDLE_COLOR=${IDLE_COLOR} bash -s" <<'SSHEOF'
+            set -euo pipefail
+            KUBECTL="sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl"
+            HEALTH=$($KUBECTL -n prod exec deployment/backend-${IDLE_COLOR} -- wget -qO- http://localhost:5000/api/health 2>/dev/null)
+            echo "$HEALTH" | grep -q '"status":"ok"' || { echo "Backend health check failed: $HEALTH" >&2; exit 1; }
+            $KUBECTL -n prod exec deployment/frontend-${IDLE_COLOR} -- wget -qO- http://localhost:3000/ 2>/dev/null | grep -q 'Data List' || { echo "Frontend check failed" >&2; exit 1; }
+SSHEOF
+          }
 
           rollback() {
+            set -euo pipefail
+            git pull --rebase origin ${{ github.event.inputs.deploy_branch }}
+
             yq -i '
               (.spec.rules[0].http.paths[] | select(.path == "/api") | .backend.service.name)
               = "backend-" + strenv(ACTIVE_COLOR)
@@ -553,27 +592,29 @@ jobs:
               -o BatchMode=yes \
               -o StrictHostKeyChecking=yes \
               -i ~/.ssh/prod.pem \
-              ubuntu@"$PROD_IP" <<EOF
+              ubuntu@"$PROD_IP" "ARGO_APP=${{ github.event.inputs.argo_app }} bash -s" <<'SSHEOF'
             set -euo pipefail
-            sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl -n argocd annotate application ${{ github.event.inputs.argo_app }} \
-              rollback-ts="$(date +%s)" --overwrite
-          EOF
+            sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl -n argocd annotate application "$ARGO_APP" \
+              rollback-ts="$(date +%s)" --overwrite --request-timeout=60s
+SSHEOF
           }
 
+          echo "Waiting 30s for ArgoCD sync to settle before monitoring..."
+          sleep 30
+
           for i in {1..60}; do
-            if ! curl -fsS "http://${PROD_IP}/api/health" | grep -q '"status":"ok"'; then
-              echo "Backend health check failed during monitoring window"
-              rollback
-              exit 1
+            if check_health; then
+              FAIL_COUNT=0
+              echo "Production healthy at check $i/60"
+            else
+              FAIL_COUNT=$((FAIL_COUNT + 1))
+              echo "Health check failed ($FAIL_COUNT/$MAX_FAILS consecutive)"
+              if [ "$FAIL_COUNT" -ge "$MAX_FAILS" ]; then
+                echo "Consecutive failures threshold reached, rolling back to ${ACTIVE_COLOR}"
+                rollback
+                exit 1
+              fi
             fi
-
-            if ! curl -fsS "http://${PROD_IP}/" | grep -q 'Data List'; then
-              echo "Frontend smoke check failed during monitoring window"
-              rollback
-              exit 1
-            fi
-
-            echo "Production healthy at check $i/60"
             sleep 10
           done
 
