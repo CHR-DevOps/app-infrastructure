@@ -492,7 +492,7 @@ jobs:
             FRONT=$($KUBECTL -n prod exec deployment/frontend-${IDLE_COLOR} -- wget -qO- http://localhost:3000/ 2>/dev/null || true)
             echo "HEALTH=${HEALTH}"
             echo "FRONT=${FRONT}"
-SSHEOF
+          SSHEOF
             )
             if echo "$RESULT" | grep -q '"status":"ok"' && echo "$RESULT" | grep -q 'Data List'; then
               echo "Production is serving the new color"
@@ -565,7 +565,7 @@ SSHEOF
             HEALTH=$($KUBECTL -n prod exec deployment/backend-${IDLE_COLOR} -- wget -qO- http://localhost:5000/api/health 2>/dev/null)
             echo "$HEALTH" | grep -q '"status":"ok"' || { echo "Backend health check failed: $HEALTH" >&2; exit 1; }
             $KUBECTL -n prod exec deployment/frontend-${IDLE_COLOR} -- wget -qO- http://localhost:3000/ 2>/dev/null | grep -q 'Data List' || { echo "Frontend check failed" >&2; exit 1; }
-SSHEOF
+          SSHEOF
           }
 
           rollback() {
@@ -596,7 +596,7 @@ SSHEOF
             set -euo pipefail
             sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl -n argocd annotate application "$ARGO_APP" \
               rollback-ts="$(date +%s)" --overwrite --request-timeout=60s
-SSHEOF
+          SSHEOF
           }
 
           echo "Waiting 30s for ArgoCD sync to settle before monitoring..."
