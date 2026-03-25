@@ -24,6 +24,8 @@ spec:
           ports:
             - containerPort: 5000
           env:
+            - name: COLOR
+              value: "blue"
             - name: DB_HOST
               valueFrom:
                 configMapKeyRef:

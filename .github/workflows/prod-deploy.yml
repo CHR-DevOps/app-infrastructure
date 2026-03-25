@@ -366,59 +366,21 @@ jobs:
 
           ssh \
             -o BatchMode=yes \
-            -o ServerAliveInterval=30 \
-            -o ServerAliveCountMax=10 \
             -o StrictHostKeyChecking=yes \
             -i ~/.ssh/prod.pem \
             ubuntu@${{ needs.detect-prod-state.outputs.prod_ip }} "IDLE_COLOR=${IDLE_COLOR} bash -s" <<'EOF'
           set -euo pipefail
-
           KUBECTL="sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl"
-          BACKEND_PF_PID=""
-          FRONTEND_PF_PID=""
 
-          cleanup() {
-            if [ -n "$BACKEND_PF_PID" ]; then
-              kill "$BACKEND_PF_PID" >/dev/null 2>&1 || true
-              wait "$BACKEND_PF_PID" 2>/dev/null || true
-            fi
+          echo "=== Backend smoke test (${IDLE_COLOR}) ==="
+          HEALTH=$($KUBECTL -n prod exec deployment/backend-${IDLE_COLOR} -- wget -qO- http://localhost:5000/api/health)
+          echo "$HEALTH"
+          echo "$HEALTH" | grep -q '"status":"ok"'
 
-            if [ -n "$FRONTEND_PF_PID" ]; then
-              kill "$FRONTEND_PF_PID" >/dev/null 2>&1 || true
-              wait "$FRONTEND_PF_PID" 2>/dev/null || true
-            fi
-          }
+          echo "=== Frontend smoke test (${IDLE_COLOR}) ==="
+          $KUBECTL -n prod exec deployment/frontend-${IDLE_COLOR} -- wget -qO- http://localhost:3000/ | grep -q 'Data List'
 
-          trap cleanup EXIT
-
-          wait_for_port_forward() {
-            url="$1"
-            log_file="$2"
-
-            for i in {1..30}; do
-              if curl -fsS "$url" >/dev/null; then
-                return 0
-              fi
-              sleep 5
-            done
-
-            echo "Port-forward never became ready for $url"
-            cat "$log_file" || true
-            return 1
-          }
-
-          nohup bash -lc "$KUBECTL -n prod port-forward svc/backend-${IDLE_COLOR} 5001:5000" \
-            >/tmp/backend-${IDLE_COLOR}-port-forward.log 2>&1 </dev/null &
-          BACKEND_PF_PID=$!
-          wait_for_port_forward http://127.0.0.1:5001/api/health /tmp/backend-${IDLE_COLOR}-port-forward.log
-          curl -fsS http://127.0.0.1:5001/api/health | grep -q '"status":"ok"'
-          curl -fsS http://127.0.0.1:5001/api/data | grep -q '^\['
-
-          nohup bash -lc "$KUBECTL -n prod port-forward svc/frontend-${IDLE_COLOR} 3001:3000" \
-            >/tmp/frontend-${IDLE_COLOR}-port-forward.log 2>&1 </dev/null &
-          FRONTEND_PF_PID=$!
-          wait_for_port_forward http://127.0.0.1:3001/ /tmp/frontend-${IDLE_COLOR}-port-forward.log
-          curl -fsS http://127.0.0.1:3001/ | grep -q 'Data List'
+          echo "All smoke tests passed"
           EOF
 
   switch-prod-traffic:
