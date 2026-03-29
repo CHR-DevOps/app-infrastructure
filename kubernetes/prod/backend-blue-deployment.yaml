@@ -19,7 +19,7 @@ spec:
         - name: ghcr-secret
       containers:
         - name: backend
-          image: ghcr.io/chr-devops/app-backend:main-673a927349a9b3209426696f2c11ccf464e178fb
+          image: ghcr.io/chr-devops/app-backend:main-05b7a37a6e161387a6baec146e5928f577d61457
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 5000
