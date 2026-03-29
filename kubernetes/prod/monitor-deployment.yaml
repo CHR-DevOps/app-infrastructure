@@ -20,7 +20,7 @@ spec:
           command:
             - /bin/sh
             - -c
-            - apk add --no-cache curl kubectl >/dev/null && chmod +x /scripts/monitor.sh && /scripts/monitor.sh
+            - apk add --no-cache curl kubectl >/dev/null && /scripts/monitor.sh
           env:
             - name: FAILURE_THRESHOLD
               value: "3"
