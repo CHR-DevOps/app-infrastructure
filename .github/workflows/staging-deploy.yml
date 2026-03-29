@@ -134,22 +134,11 @@ jobs:
     needs: build-and-push-images
 
     steps:
-      - name: Checkout infrastructure branch if exists, else main
+      - name: Checkout develop
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: main
-
-      - name: Switch to infrastructure branch if it exists
-        shell: bash
-        run: |
-          git fetch origin
-
-          if git ls-remote --heads origin "${{ needs.build-and-push-images.outputs.deploy_branch }}" | grep -q "${{ needs.build-and-push-images.outputs.deploy_branch }}"; then
-            git checkout "${{ needs.build-and-push-images.outputs.deploy_branch }}"
-          else
-            git checkout main
-          fi
+          ref: develop
 
       - name: Install yq
         shell: bash
@@ -176,9 +165,6 @@ jobs:
         run: |
           git config user.name github-actions
           git config user.email github-actions@github.com
-
-          git fetch origin develop
-          git rebase origin/develop
 
           git add kubernetes/staging/kustomization.yaml
           git commit -m "staging deploy ${{ needs.build-and-push-images.outputs.deploy_branch }}" || true
