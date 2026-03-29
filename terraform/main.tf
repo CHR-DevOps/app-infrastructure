@@ -126,7 +126,7 @@ resource "aws_instance" "k8s_devstaging" {
     git_branch      = var.git_branch
   })
 
-  
+
 
   user_data_replace_on_change = true
 
