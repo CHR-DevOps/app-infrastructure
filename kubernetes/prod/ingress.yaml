@@ -12,13 +12,13 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: backend-
+                name: backend-blue
                 port:
                   number: 5000
           - path: /
             pathType: Prefix
             backend:
               service:
-                name: frontend-
+                name: frontend-blue
                 port:
                   number: 3000
