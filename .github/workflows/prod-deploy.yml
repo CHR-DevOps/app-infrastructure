@@ -424,6 +424,7 @@ jobs:
         shell: bash
         run: |
           IDLE_COLOR="${{ needs.detect-prod-state.outputs.idle_color }}"
+          export IDLE_COLOR
 
           yq -i '
             (.spec.rules[0].http.paths[] | select(.path == "/api") | .backend.service.name)
@@ -587,6 +588,7 @@ jobs:
 
           rollback() {
             set -euo pipefail
+            export ACTIVE_COLOR
             git pull --rebase origin ${{ github.event.inputs.deploy_branch }}
 
             yq -i '
