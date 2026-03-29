@@ -29,10 +29,15 @@ jobs:
         uses: hashicorp/setup-terraform@v3
 
       - name: Terraform Format Check
-        run: terraform fmt -check -recursive 2>&1 | tee /tmp/fmt-output.txt
+        shell: bash
+        run: |
+          set -euo pipefail
+          terraform fmt -check -recursive 2>&1 | tee /tmp/fmt-output.txt
 
       - name: Terraform Validate
+        shell: bash
         run: |
+          set -euo pipefail
           terraform init -backend=false 2>&1
           terraform validate 2>&1 | tee /tmp/validate-output.txt
 
