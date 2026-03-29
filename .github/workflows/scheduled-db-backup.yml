@@ -1,0 +1,116 @@
+name: Scheduled DB Backup
+
+on:
+  schedule:
+    - cron: '0 22 * * *'  # 00:00 Romania time (UTC+2 winter / UTC+3 summer — scheduled for UTC+2)
+  workflow_dispatch:
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+    steps:
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: eu-central-1
+
+      - name: Get prod public IP
+        id: prod-ip
+        shell: bash
+        run: |
+          IP=$(aws ec2 describe-instances \
+            --filters \
+              "Name=tag:Name,Values=k8s-prod" \
+              "Name=instance-state-name,Values=running" \
+            --query "Reservations[0].Instances[0].PublicIpAddress" \
+            --output text)
+
+          if [ -z "$IP" ] || [ "$IP" = "None" ]; then
+            echo "Prod instance not found or not running"
+            exit 1
+          fi
+
+          echo "ip=$IP" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare SSH key
+        shell: bash
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.DEV_STAGING_EC2_SSH_KEY }}" | tr -d '\r' > ~/.ssh/prod.pem
+          chmod 600 ~/.ssh/prod.pem
+
+          for i in {1..30}; do
+            if ssh-keyscan -T 10 -H ${{ steps.prod-ip.outputs.ip }} >> ~/.ssh/known_hosts 2>/dev/null; then
+              echo "SSH ready"
+              exit 0
+            fi
+            sleep 10
+          done
+
+          exit 1
+
+      - name: Backup production database
+        shell: bash
+        run: |
+          BACKUP_FILE=$(ssh \
+            -q \
+            -T \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -i ~/.ssh/prod.pem \
+            ubuntu@${{ steps.prod-ip.outputs.ip }} "bash --noprofile --norc -s" <<'EOF'
+          set -euo pipefail
+
+          KUBECTL="sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl"
+          POD_NAME=$($KUBECTL -n prod get pod -l app=mariadb -o jsonpath='{.items[0].metadata.name}')
+          TIMESTAMP=$(date +%d-%m-%Y:%H-%M-%S)
+          BACKUP_FILE="/tmp/prod-mydb-${TIMESTAMP}.sql.gz"
+
+          $KUBECTL -n prod exec "$POD_NAME" -- sh -lc '
+            DUMP_BIN="${DUMP_BIN:-}"
+
+            if [ -z "$DUMP_BIN" ]; then
+              if command -v mariadb-dump >/dev/null 2>&1; then
+                DUMP_BIN="mariadb-dump"
+              elif command -v mysqldump >/dev/null 2>&1; then
+                DUMP_BIN="mysqldump"
+              else
+                echo "No MariaDB dump binary found" >&2
+                exit 1
+              fi
+            fi
+
+            MYSQL_PWD="$MYSQL_ROOT_PASSWORD" "$DUMP_BIN" -u root --databases mydb
+          ' | gzip -c > "$BACKUP_FILE"
+
+          test -s "$BACKUP_FILE"
+          echo "$BACKUP_FILE"
+          EOF
+          )
+
+          BACKUP_FILENAME=$(basename "$BACKUP_FILE")
+
+          scp \
+            -q \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -i ~/.ssh/prod.pem \
+            ubuntu@${{ steps.prod-ip.outputs.ip }}:"$BACKUP_FILE" \
+            "/tmp/${BACKUP_FILENAME}"
+
+          aws s3 cp "/tmp/${BACKUP_FILENAME}" \
+            "s3://db-backup-chr/${BACKUP_FILENAME}" \
+            --region eu-central-1
+
+          {
+            echo "## Scheduled DB backup"
+            echo ""
+            echo "- Backup uploaded to S3: \`s3://db-backup-chr/${BACKUP_FILENAME}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

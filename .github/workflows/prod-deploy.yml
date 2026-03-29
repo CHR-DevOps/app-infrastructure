@@ -143,6 +143,9 @@ jobs:
       - name: Backup production database
         id: backup
         shell: bash
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
           BACKUP_FILE=$(ssh \
             -q \
@@ -155,7 +158,7 @@ jobs:
 
           KUBECTL="sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl"
           POD_NAME=$($KUBECTL -n prod get pod -l app=mariadb -o jsonpath='{.items[0].metadata.name}')
-          TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+          TIMESTAMP=$(date +%d-%m-%Y:%H-%M-%S)
           BACKUP_FILE="/tmp/prod-mydb-${TIMESTAMP}.sql.gz"
 
           $KUBECTL -n prod exec "$POD_NAME" -- sh -lc '
@@ -180,12 +183,26 @@ jobs:
           EOF
           )
 
-          echo "backup_file=$BACKUP_FILE" >> "$GITHUB_OUTPUT"
+          BACKUP_FILENAME=$(basename "$BACKUP_FILE")
+
+          scp \
+            -q \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -i ~/.ssh/prod.pem \
+            ubuntu@${{ needs.detect-prod-state.outputs.prod_ip }}:"$BACKUP_FILE" \
+            "/tmp/${BACKUP_FILENAME}"
+
+          aws s3 cp "/tmp/${BACKUP_FILENAME}" \
+            "s3://db-backup-chr/${BACKUP_FILENAME}" \
+            --region eu-central-1
+
+          echo "backup_file=s3://db-backup-chr/${BACKUP_FILENAME}" >> "$GITHUB_OUTPUT"
 
           {
             echo "## Production DB backup"
             echo ""
-            echo "- Backup file on prod EC2: \`$BACKUP_FILE\`"
+            echo "- Backup uploaded to S3: \`s3://db-backup-chr/${BACKUP_FILENAME}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
   update-idle-manifests:
