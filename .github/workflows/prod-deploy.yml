@@ -513,7 +513,18 @@ jobs:
           SSHEOF
             )
             if echo "$RESULT" | grep -q '"status":"ok"' && echo "$RESULT" | grep -q 'Data List'; then
-              echo "Production is serving the new color"
+              echo "Production is now serving: ${IDLE_COLOR}"
+              {
+                if [ "${IDLE_COLOR}" = "blue" ]; then
+                  echo "## 🔵 Production switched to BLUE"
+                else
+                  echo "## 🟢 Production switched to GREEN"
+                fi
+                echo ""
+                echo "- Active color: \`${IDLE_COLOR}\`"
+                echo "- Previous color: \`${ACTIVE_COLOR}\`"
+                echo "- Image tag: \`${{ github.event.inputs.image_tag }}\`"
+              } >> "$GITHUB_STEP_SUMMARY"
               exit 0
             fi
             echo "Attempt $i/60: not ready yet, retrying in 10s..."
