@@ -1,0 +1,35 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: monitoring
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+
+    scrape_configs:
+      - job_name: 'prometheus'
+        static_configs:
+          - targets: ['localhost:9090']
+
+      - job_name: 'backend-prod-blue'
+        static_configs:
+          - targets: ['backend-blue.prod.svc.cluster.local:5000']
+            labels:
+              env: prod
+              color: blue
+
+      - job_name: 'backend-prod-green'
+        static_configs:
+          - targets: ['backend-green.prod.svc.cluster.local:5000']
+            labels:
+              env: prod
+              color: green
+
+      - job_name: 'backend-staging'
+        static_configs:
+          - targets: ['backend.staging.svc.cluster.local:5000']
+            labels:
+              env: staging
