@@ -494,6 +494,7 @@ jobs:
         shell: bash
         run: |
           PROD_IP="${{ needs.detect-prod-state.outputs.prod_ip }}"
+          ACTIVE_COLOR="${{ needs.detect-prod-state.outputs.active_color }}"
           IDLE_COLOR="${{ needs.detect-prod-state.outputs.idle_color }}"
 
           for i in {1..60}; do
