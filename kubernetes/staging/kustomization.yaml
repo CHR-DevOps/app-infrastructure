@@ -4,7 +4,6 @@ namespace: staging
 resources:
   - namespace.yaml
   - configmap.yaml
-  - secret.yaml
   - ingress.yaml
   - db/pvc.yaml
   - db/deployment.yaml

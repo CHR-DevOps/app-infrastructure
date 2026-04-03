@@ -287,6 +287,22 @@ jobs:
 
           exit 1
 
+      - name: Create prod Kubernetes secrets
+        shell: bash
+        run: |
+          ssh \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -i ~/.ssh/prod.pem \
+            ubuntu@${{ needs.detect-prod-state.outputs.prod_ip }} \
+            "sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl -n prod create secret generic app-secrets \
+              --from-literal=DB_PASSWORD=${{ secrets.PROD_DB_PASSWORD }} \
+              --from-literal=MYSQL_ROOT_PASSWORD=${{ secrets.PROD_MYSQL_ROOT_PASSWORD }} \
+              --dry-run=client -o yaml | sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl apply -f - && \
+            sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl -n prod create secret generic basic-auth-secret \
+              --from-literal=users=${{ secrets.BASIC_AUTH_USERS }} \
+              --dry-run=client -o yaml | sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl apply -f -"
+
       - name: Patch prod ArgoCD app
         shell: bash
         run: |

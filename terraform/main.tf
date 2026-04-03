@@ -1,3 +1,36 @@
+# DB Backup S3 Bucket
+resource "aws_s3_bucket" "db_backup" {
+  bucket        = "db-backup-chr"
+  force_destroy = true
+
+  tags = {
+    Name      = "db-backup-chr"
+    ManagedBy = "terraform"
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "db_backup" {
+  bucket = aws_s3_bucket.db_backup.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "db_backup" {
+  bucket = aws_s3_bucket.db_backup.id
+
+  rule {
+    id     = "delete-old-backups"
+    status = "Enabled"
+
+    expiration {
+      days = 30
+    }
+  }
+}
+
 # VPC
 resource "aws_vpc" "devops_vpc" {
   cidr_block           = "10.0.0.0/16"

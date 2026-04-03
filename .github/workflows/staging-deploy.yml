@@ -241,6 +241,19 @@ jobs:
 
           exit 1
 
+      - name: Create staging Kubernetes secrets
+        shell: bash
+        run: |
+          ssh \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -i ~/.ssh/staging.pem \
+            ubuntu@${{ steps.staging-ip.outputs.ip }} \
+            "sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl -n staging create secret generic app-secrets \
+              --from-literal=DB_PASSWORD=${{ secrets.STAGING_DB_PASSWORD }} \
+              --from-literal=MYSQL_ROOT_PASSWORD=${{ secrets.STAGING_MYSQL_ROOT_PASSWORD }} \
+              --dry-run=client -o yaml | sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl apply -f -"
+
       - name: Patch staging ArgoCD
         shell: bash
         run: |
