@@ -19,6 +19,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: prod
+  cancel-in-progress: false
+
 jobs:
   detect-prod-state:
     runs-on: ubuntu-latest
