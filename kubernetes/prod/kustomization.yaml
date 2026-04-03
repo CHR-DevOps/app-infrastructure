@@ -16,6 +16,7 @@ resources:
   - frontend-blue-service.yaml
   - frontend-green-service.yaml
   - ingress.yaml
+  - auth-secret.yaml
   - auth-middleware.yaml
   - monitor-serviceaccount.yaml
   - monitor-role.yaml
