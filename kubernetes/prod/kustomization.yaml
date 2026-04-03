@@ -4,7 +4,6 @@ namespace: prod
 resources:
   - namespace.yaml
   - configmap.yaml
-  - secret.yaml
   - db/pvc.yaml
   - db/deployment.yaml
   - db/service.yaml
@@ -17,6 +16,7 @@ resources:
   - frontend-blue-service.yaml
   - frontend-green-service.yaml
   - ingress.yaml
+  - auth-middleware.yaml
   - monitor-serviceaccount.yaml
   - monitor-role.yaml
   - monitor-rolebinding.yaml

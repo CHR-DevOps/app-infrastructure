@@ -3,6 +3,8 @@ kind: Ingress
 metadata:
   name: prod-ingress
   namespace: prod
+  annotations:
+    traefik.ingress.kubernetes.io/router.middlewares: prod-basic-auth@kubernetescrd
 spec:
   ingressClassName: traefik
   rules:
