@@ -1,7 +1,7 @@
 # DB Backup S3 Bucket
 resource "aws_s3_bucket" "db_backup" {
   bucket        = "db-backup-chr"
-  force_destroy = true
+  force_destroy = false
 
   tags = {
     Name      = "db-backup-chr"
