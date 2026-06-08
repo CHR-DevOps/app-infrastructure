@@ -39,7 +39,7 @@ resource "aws_scheduler_schedule" "start_ec2_morning" {
   group_name                   = "default"
   schedule_expression          = "cron(0 6 ? * MON-FRI *)"
   schedule_expression_timezone = "Europe/Bucharest"
-  state                        = "ENABLED"
+  state                        = "DISABLED"
 
   flexible_time_window {
     mode = "OFF"
