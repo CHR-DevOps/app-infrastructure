@@ -1,8 +1,6 @@
 name: Scheduled DB Backup
 
 on:
-  schedule:
-    - cron: '0 22 * * *'  # 00:00 Romania time (UTC+2 winter / UTC+3 summer — scheduled for UTC+2)
   workflow_dispatch:
 
 jobs:
